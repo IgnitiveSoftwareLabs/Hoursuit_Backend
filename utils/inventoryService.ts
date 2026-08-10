@@ -1,0 +1,236 @@
+import { Transaction } from "sequelize";
+import GRN from "../modals/Transactions/purchase/GRN/GRNHeader";
+import GRNLine from "../modals/Transactions/purchase/GRN/GRNLine";
+import PurchaseOrderLine from "../modals/Transactions/purchase/purchaseOrder/purchaseOrderLine";
+import PurchaseOrderHeader from "../modals/Transactions/purchase/purchaseOrder/purchaseOrderHeader";
+import { PurchaseReturnHeader, PurchaseReturnLine } from "../modals/Transactions/purchase/purchaseReturn";
+import ItemMaster from "../modals/masters/items/itemMaster";
+import InventoryCount from "../modals/inventory/inventory";
+import { normalizePurchaseOrderStatus } from "./p2pStatus";
+
+export const InventoryService = {
+  /**
+   * Updates warehouse inventory balances on GRN approval or receipt
+   */
+
+    updateStockFromGRN: async (
+    grnId: number,
+    warehouseId: number,
+    companyId: number,
+    userId: number,
+    transaction?: Transaction
+  ) => {
+    // Fetch GRN Header along with Lines, ItemMaster and PurchaseOrderLine
+    const grn = await GRN.findOne({
+      where: { id: grnId, CompanyId: companyId },
+      include: [
+        {
+          model: GRNLine,
+          as: "lineItems",
+          include: [
+            { model: ItemMaster, as: "item" },
+            { model: PurchaseOrderLine, as: "purchaseOrderLine" }
+          ]
+        }
+      ],
+      transaction
+    });
+
+    if (!grn) {
+      throw new Error(`GRN record #${grnId} not found.`);
+    }
+
+    const grnLines = ((grn as any).lineItems || []) as any[];
+
+    for (const itemLine of grnLines) {
+      const acceptedQty = Number(itemLine.acceptedQty || 0);
+      const receivedQty = Number(itemLine.receivedQty || 0);
+      const qty = acceptedQty > 0 ? acceptedQty : receivedQty;
+
+      if (qty <= 0) continue;
+
+      const rate = Number(itemLine.purchaseOrderLine?.rate || 0);
+      const itemId = itemLine.itemId || itemLine.item_id || itemLine.item?.id;
+      const uomId = itemLine.uom_id || itemLine.item?.uom_id || 1;
+
+      if (!itemId) {
+        throw new Error(`Missing item_id for GRN Line ID: ${itemLine.id}`);
+      }
+
+      // Execute inventory addition via InventoryCount model static method
+      await InventoryCount.updateInventory(
+        {
+          item_id: itemId,
+          qty,
+          uom_id: uomId,
+          rate,
+          amount: qty * rate,
+          warehouseId: warehouseId || (grn as any).warehouseId || itemLine.warehouseId,
+          godownId: itemLine.godownId || (grn as any).godownId || null,
+          stack: itemLine.stack || (grn as any).stackId || null,
+          customer_id: null,
+          lot_number: itemLine.lot_number || "GENERAL",
+          CompanyId: companyId,
+          user_id: userId,
+          operation: "ADD"
+        },
+        transaction
+      );
+    }
+
+    // Auto-update linked Purchase Order status to PARTIAL_RECEIVED / COMPLETED
+    if ((grn as any).purchaseOrderId) {
+      const poId = Number((grn as any).purchaseOrderId);
+      const po = await PurchaseOrderHeader.findByPk(poId, { transaction });
+      if (po && po.status !== "CANCELLED") {
+        const poLines = await PurchaseOrderLine.findAll({
+          where: { purchase_order_header_id: poId, CompanyId: companyId },
+          transaction,
+        });
+
+        const totalOrderedQty = poLines.reduce((sum, line) => sum + Number((line as any).quantity || 0), 0);
+        const totalReceivedQty = grnLines.reduce(
+          (sum, line) => sum + Number(line.acceptedQty || line.receivedQty || 0),
+          0
+        );
+
+        const nextStatus = totalOrderedQty > 0 && totalReceivedQty >= totalOrderedQty
+          ? "COMPLETED"
+          : "PARTIAL_RECEIVED";
+        const normalizedStatus = normalizePurchaseOrderStatus(nextStatus);
+
+        if (po.status !== normalizedStatus) {
+          await po.update({ status: normalizedStatus }, { transaction });
+        }
+      }
+    }
+  },
+
+  /**
+   * Reverses inventory stock entries for GRN cancellation / rejection
+   */
+  reverseStockFromGRN: async (
+    grnId: number,
+    warehouseId: number,
+    companyId: number,
+    userId: number,
+    transaction?: Transaction
+  ) => {
+    const grn = await GRN.findOne({
+      where: { id: grnId, CompanyId: companyId },
+      include: [
+        {
+          model: GRNLine,
+          as: "lineItems",
+          include: [
+            { model: ItemMaster, as: "item" },
+            { model: PurchaseOrderLine, as: "purchaseOrderLine" }
+          ]
+        }
+      ],
+      transaction
+    });
+
+    if (!grn) {
+      throw new Error(`GRN record #${grnId} not found.`);
+    }
+
+    const grnLines = ((grn as any).lineItems || []) as any[];
+
+    for (const itemLine of grnLines) {
+      const acceptedQty = Number(itemLine.acceptedQty || 0);
+      const receivedQty = Number(itemLine.receivedQty || 0);
+      const qty = acceptedQty > 0 ? acceptedQty : receivedQty;
+
+      if (qty <= 0) continue;
+
+      const rate = Number(itemLine.purchaseOrderLine?.rate || 0);
+      const itemId = itemLine.itemId || itemLine.item_id || itemLine.item?.id;
+      const uomId = itemLine.uom_id || itemLine.item?.uom_id || 1;
+
+      await InventoryCount.updateInventory(
+        {
+          item_id: itemId,
+          qty,
+          uom_id: uomId,
+          rate,
+          amount: qty * rate,
+          warehouseId: warehouseId || (grn as any).warehouseId || itemLine.warehouseId,
+          godownId: itemLine.godownId || (grn as any).godownId || null,
+          stack: itemLine.stack || (grn as any).stackId || null,
+          customer_id: null,
+          lot_number: itemLine.lot_number || "GENERAL",
+          CompanyId: companyId,
+          user_id: userId,
+          operation: "SUBTRACT"
+        },
+        transaction
+      );
+    }
+  },
+
+  /**
+   * Reduces warehouse inventory balances on Purchase Return execution
+   */
+  reduceStockFromPurchaseReturn: async (
+    returnId: number,
+    companyId: number,
+    userId: number,
+    transaction?: Transaction
+  ) => {
+    const purchaseReturn = await PurchaseReturnHeader.findOne({
+      where: { id: returnId, companyId },
+      include: [
+        {
+          model: PurchaseReturnLine,
+          as: "purchaseReturnLines",
+          include: [{ model: ItemMaster, as: "item" }]
+        }
+      ],
+      transaction
+    });
+
+    if (!purchaseReturn) {
+      throw new Error(`Purchase return record #${returnId} not found.`);
+    }
+
+    let warehouseId: number | null = null;
+    if (purchaseReturn.grnHeaderId) {
+      const grn = await GRN.findByPk(purchaseReturn.grnHeaderId, { transaction });
+      if (grn) {
+        warehouseId = (grn as any).warehouseId || null;
+      }
+    }
+
+    const lines = ((purchaseReturn as any).purchaseReturnLines || []) as any[];
+
+    for (const line of lines) {
+      const qty = Number(line.returnQty || 0);
+      if (qty <= 0) continue;
+
+      const rate = Number(line.unitPrice || 0);
+      const itemId = line.itemId;
+      const uomId = line.item?.uom_id || 1;
+
+      await InventoryCount.updateInventory(
+        {
+          item_id: itemId,
+          qty,
+          uom_id: uomId,
+          rate,
+          amount: qty * rate,
+          warehouseId: warehouseId || 1,
+          godownId: null,
+          stack: null,
+          customer_id: null,
+          lot_number: line.batchNo || "GENERAL",
+          CompanyId: companyId,
+          user_id: userId,
+          operation: "SUBTRACT"
+        },
+        transaction
+      );
+    }
+  }
+};
+

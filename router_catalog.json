@@ -1,0 +1,1180 @@
+{
+  "categoryRouter.ts": [
+    {
+      "method": "POST",
+      "path": "/"
+    },
+    {
+      "method": "GET",
+      "path": "/get"
+    },
+    {
+      "method": "GET",
+      "path": "/:id"
+    },
+    {
+      "method": "PUT",
+      "path": "/:id"
+    },
+    {
+      "method": "DELETE",
+      "path": "/:id"
+    }
+  ],
+  "cityRouter.ts": [
+    {
+      "method": "POST",
+      "path": "/"
+    },
+    {
+      "method": "GET",
+      "path": "/get"
+    },
+    {
+      "method": "GET",
+      "path": "/:id"
+    },
+    {
+      "method": "PUT",
+      "path": "/:id"
+    },
+    {
+      "method": "DELETE",
+      "path": "/:id"
+    }
+  ],
+  "commodityRouter.ts": [
+    {
+      "method": "POST",
+      "path": "/"
+    },
+    {
+      "method": "GET",
+      "path": "/"
+    },
+    {
+      "method": "GET",
+      "path": "/:id"
+    },
+    {
+      "method": "PUT",
+      "path": "/:id"
+    },
+    {
+      "method": "DELETE",
+      "path": "/:id"
+    }
+  ],
+  "companyRouter.ts": [
+    {
+      "method": "POST",
+      "path": "/create"
+    },
+    {
+      "method": "GET",
+      "path": "/get"
+    },
+    {
+      "method": "PUT",
+      "path": "/update/:id"
+    },
+    {
+      "method": "DELETE",
+      "path": "/delete/:id"
+    }
+  ],
+  "currencyRouter.ts": [
+    {
+      "method": "POST",
+      "path": "/"
+    },
+    {
+      "method": "GET",
+      "path": "/get"
+    },
+    {
+      "method": "GET",
+      "path": "/:id"
+    },
+    {
+      "method": "PUT",
+      "path": "/:id"
+    },
+    {
+      "method": "DELETE",
+      "path": "/:id"
+    }
+  ],
+  "customerRouter.ts": [
+    {
+      "method": "POST",
+      "path": "/create"
+    },
+    {
+      "method": "GET",
+      "path": "/get"
+    },
+    {
+      "method": "GET",
+      "path": "/getSingle/:id"
+    },
+    {
+      "method": "PUT",
+      "path": "/update/:id"
+    },
+    {
+      "method": "DELETE",
+      "path": "/delete/:id"
+    }
+  ],
+  "deliveryChallanRouter.ts": [
+    {
+      "method": "POST",
+      "path": "/create"
+    },
+    {
+      "method": "GET",
+      "path": "/get"
+    },
+    {
+      "method": "GET",
+      "path": "/:id"
+    },
+    {
+      "method": "PUT",
+      "path": "/:id"
+    },
+    {
+      "method": "PATCH",
+      "path": "/:id/status"
+    },
+    {
+      "method": "DELETE",
+      "path": "/:id"
+    }
+  ],
+  "employeeRouter.ts": [
+    {
+      "method": "POST",
+      "path": "/create"
+    },
+    {
+      "method": "GET",
+      "path": "/get"
+    },
+    {
+      "method": "GET",
+      "path": "/:id"
+    },
+    {
+      "method": "PUT",
+      "path": "/:id"
+    },
+    {
+      "method": "DELETE",
+      "path": "/:id"
+    }
+  ],
+  "godownRouter.ts": [
+    {
+      "method": "POST",
+      "path": "/create"
+    },
+    {
+      "method": "GET",
+      "path": "/get/:warehouseId"
+    },
+    {
+      "method": "PUT",
+      "path": "/update/:id"
+    },
+    {
+      "method": "DELETE",
+      "path": "/delete/:id"
+    }
+  ],
+  "grnRouter.ts": [
+    {
+      "method": "POST",
+      "path": "/create"
+    },
+    {
+      "method": "GET",
+      "path": "/get"
+    },
+    {
+      "method": "GET",
+      "path": "/:id"
+    },
+    {
+      "method": "PUT",
+      "path": "/:id"
+    },
+    {
+      "method": "PATCH",
+      "path": "/:id/status"
+    },
+    {
+      "method": "DELETE",
+      "path": "/:id"
+    }
+  ],
+  "hsnRouter.ts": [
+    {
+      "method": "POST",
+      "path": "/"
+    },
+    {
+      "method": "GET",
+      "path": "/get"
+    },
+    {
+      "method": "GET",
+      "path": "/:id"
+    },
+    {
+      "method": "PUT",
+      "path": "/:id"
+    },
+    {
+      "method": "DELETE",
+      "path": "/:id"
+    }
+  ],
+  "inventoryRouter.ts": [
+    {
+      "method": "GET",
+      "path": "/"
+    },
+    {
+      "method": "GET",
+      "path": "/get"
+    },
+    {
+      "method": "GET",
+      "path": "/getSingle/:id"
+    }
+  ],
+  "itemGroupRouter.ts": [
+    {
+      "method": "POST",
+      "path": "/create"
+    },
+    {
+      "method": "GET",
+      "path": "/get"
+    },
+    {
+      "method": "GET",
+      "path": "/getsingle/:id"
+    },
+    {
+      "method": "PUT",
+      "path": "/update/:id"
+    },
+    {
+      "method": "DELETE",
+      "path": "/delete/:id"
+    }
+  ],
+  "itemRouter.ts": [
+    {
+      "method": "POST",
+      "path": "/"
+    },
+    {
+      "method": "GET",
+      "path": "/get"
+    },
+    {
+      "method": "GET",
+      "path": "/:id"
+    },
+    {
+      "method": "PUT",
+      "path": "/:id"
+    },
+    {
+      "method": "DELETE",
+      "path": "/:id"
+    }
+  ],
+  "panAvailibilityRouter.ts": [
+    {
+      "method": "POST",
+      "path": "/create"
+    },
+    {
+      "method": "GET",
+      "path": "/get"
+    },
+    {
+      "method": "GET",
+      "path": "/:id"
+    },
+    {
+      "method": "PUT",
+      "path": "/:id"
+    },
+    {
+      "method": "DELETE",
+      "path": "/:id"
+    }
+  ],
+  "paymentMethodRouter.ts": [
+    {
+      "method": "POST",
+      "path": "/create"
+    },
+    {
+      "method": "GET",
+      "path": "/get"
+    },
+    {
+      "method": "GET",
+      "path": "/:id"
+    },
+    {
+      "method": "PUT",
+      "path": "/:id"
+    },
+    {
+      "method": "DELETE",
+      "path": "/:id"
+    }
+  ],
+  "permissionRouter.ts": [
+    {
+      "method": "POST",
+      "path": "/"
+    },
+    {
+      "method": "GET",
+      "path": "/get"
+    },
+    {
+      "method": "GET",
+      "path": "/:id"
+    },
+    {
+      "method": "PUT",
+      "path": "/:id"
+    },
+    {
+      "method": "DELETE",
+      "path": "/:id"
+    }
+  ],
+  "purchaseInvoiceRouter.ts": [
+    {
+      "method": "POST",
+      "path": "/create"
+    },
+    {
+      "method": "GET",
+      "path": "/get"
+    },
+    {
+      "method": "GET",
+      "path": "/:id"
+    },
+    {
+      "method": "PUT",
+      "path": "/:id"
+    },
+    {
+      "method": "PATCH",
+      "path": "/:id/status"
+    },
+    {
+      "method": "DELETE",
+      "path": "/:id"
+    }
+  ],
+  "purchaseOrderRouter.ts": [
+    {
+      "method": "POST",
+      "path": "/create"
+    },
+    {
+      "method": "GET",
+      "path": "/get"
+    },
+    {
+      "method": "GET",
+      "path": "/:id"
+    },
+    {
+      "method": "PUT",
+      "path": "/:id"
+    },
+    {
+      "method": "PATCH",
+      "path": "/:id/status"
+    },
+    {
+      "method": "DELETE",
+      "path": "/:id"
+    }
+  ],
+  "purchaseReturnRouter.ts": [
+    {
+      "method": "POST",
+      "path": "/create"
+    },
+    {
+      "method": "GET",
+      "path": "/get"
+    },
+    {
+      "method": "GET",
+      "path": "/:id"
+    },
+    {
+      "method": "PUT",
+      "path": "/:id"
+    },
+    {
+      "method": "PATCH",
+      "path": "/:id/status"
+    },
+    {
+      "method": "DELETE",
+      "path": "/:id"
+    }
+  ],
+  "qualityReportRouter.ts": [
+    {
+      "method": "POST",
+      "path": "/create"
+    },
+    {
+      "method": "GET",
+      "path": "/get"
+    },
+    {
+      "method": "GET",
+      "path": "/:id"
+    },
+    {
+      "method": "PUT",
+      "path": "/:id"
+    },
+    {
+      "method": "PATCH",
+      "path": "/:id/status"
+    },
+    {
+      "method": "DELETE",
+      "path": "/:id"
+    }
+  ],
+  "registrationTypeRouter.ts": [
+    {
+      "method": "POST",
+      "path": "/create"
+    },
+    {
+      "method": "GET",
+      "path": "/get"
+    },
+    {
+      "method": "GET",
+      "path": "/:id"
+    },
+    {
+      "method": "PUT",
+      "path": "/:id"
+    },
+    {
+      "method": "DELETE",
+      "path": "/:id"
+    }
+  ],
+  "salesOrderRouter.ts": [
+    {
+      "method": "POST",
+      "path": "/create"
+    },
+    {
+      "method": "GET",
+      "path": "/get"
+    },
+    {
+      "method": "GET",
+      "path": "/:id"
+    },
+    {
+      "method": "PUT",
+      "path": "/:id"
+    },
+    {
+      "method": "PATCH",
+      "path": "/:id/status"
+    },
+    {
+      "method": "DELETE",
+      "path": "/:id"
+    }
+  ],
+  "salesReturnRouter.ts": [
+    {
+      "method": "POST",
+      "path": "/create"
+    },
+    {
+      "method": "GET",
+      "path": "/get"
+    },
+    {
+      "method": "GET",
+      "path": "/:id"
+    },
+    {
+      "method": "PUT",
+      "path": "/:id"
+    },
+    {
+      "method": "PATCH",
+      "path": "/:id/status"
+    },
+    {
+      "method": "DELETE",
+      "path": "/:id"
+    }
+  ],
+  "serviceCategoryRouter.ts": [
+    {
+      "method": "POST",
+      "path": "/"
+    },
+    {
+      "method": "GET",
+      "path": "/get"
+    },
+    {
+      "method": "GET",
+      "path": "/:id"
+    },
+    {
+      "method": "PUT",
+      "path": "/:id"
+    },
+    {
+      "method": "DELETE",
+      "path": "/:id"
+    }
+  ],
+  "serviceTypeRouter.ts": [
+    {
+      "method": "POST",
+      "path": "/"
+    },
+    {
+      "method": "GET",
+      "path": "/get"
+    },
+    {
+      "method": "GET",
+      "path": "/:id"
+    },
+    {
+      "method": "PUT",
+      "path": "/:id"
+    },
+    {
+      "method": "DELETE",
+      "path": "/:id"
+    }
+  ],
+  "stackRouter.ts": [
+    {
+      "method": "POST",
+      "path": "/create"
+    },
+    {
+      "method": "GET",
+      "path": "/get/:godownId"
+    },
+    {
+      "method": "PUT",
+      "path": "/update/:id"
+    },
+    {
+      "method": "DELETE",
+      "path": "/delete/:id"
+    }
+  ],
+  "stateRouter.ts": [
+    {
+      "method": "POST",
+      "path": "/"
+    },
+    {
+      "method": "GET",
+      "path": "/"
+    },
+    {
+      "method": "GET",
+      "path": "/:id"
+    },
+    {
+      "method": "PUT",
+      "path": "/:id"
+    },
+    {
+      "method": "DELETE",
+      "path": "/:id"
+    }
+  ],
+  "subsidiaryRouter.ts": [
+    {
+      "method": "POST",
+      "path": "/"
+    },
+    {
+      "method": "GET",
+      "path": "/get"
+    },
+    {
+      "method": "GET",
+      "path": "/:id"
+    },
+    {
+      "method": "PUT",
+      "path": "/:id"
+    },
+    {
+      "method": "DELETE",
+      "path": "/:id"
+    }
+  ],
+  "transportationMode.ts": [
+    {
+      "method": "POST",
+      "path": "/"
+    },
+    {
+      "method": "GET",
+      "path": "/get"
+    },
+    {
+      "method": "GET",
+      "path": "/:id"
+    },
+    {
+      "method": "PUT",
+      "path": "/:id"
+    },
+    {
+      "method": "DELETE",
+      "path": "/:id"
+    }
+  ],
+  "UOMRouter.ts": [
+    {
+      "method": "POST",
+      "path": "/"
+    },
+    {
+      "method": "GET",
+      "path": "/get"
+    },
+    {
+      "method": "GET",
+      "path": "/uom/uploads"
+    },
+    {
+      "method": "GET",
+      "path": "/:id"
+    },
+    {
+      "method": "PUT",
+      "path": "/:id"
+    },
+    {
+      "method": "DELETE",
+      "path": "/:id"
+    }
+  ],
+  "vendorRouter.ts": [
+    {
+      "method": "POST",
+      "path": "/create"
+    },
+    {
+      "method": "GET",
+      "path": "/get"
+    },
+    {
+      "method": "GET",
+      "path": "/:id"
+    },
+    {
+      "method": "PUT",
+      "path": "/:id"
+    },
+    {
+      "method": "DELETE",
+      "path": "/:id"
+    }
+  ],
+  "warehouseRouter.ts": [
+    {
+      "method": "POST",
+      "path": "/create"
+    },
+    {
+      "method": "GET",
+      "path": "/get"
+    },
+    {
+      "method": "PUT",
+      "path": "/update/:id"
+    },
+    {
+      "method": "DELETE",
+      "path": "/delete/:id"
+    }
+  ],
+  "workCategoryRouter.ts": [
+    {
+      "method": "POST",
+      "path": "/"
+    },
+    {
+      "method": "GET",
+      "path": "/get"
+    },
+    {
+      "method": "GET",
+      "path": "/:id"
+    },
+    {
+      "method": "PATCH",
+      "path": "/:id"
+    },
+    {
+      "method": "DELETE",
+      "path": "/:id"
+    }
+  ],
+  "index.ts": [
+    {
+      "method": "GET",
+      "path": "/states"
+    },
+    {
+      "method": "GET",
+      "path": "/states/:id"
+    },
+    {
+      "method": "POST",
+      "path": "/states"
+    },
+    {
+      "method": "PUT",
+      "path": "/states/:id"
+    },
+    {
+      "method": "DELETE",
+      "path": "/states/:id"
+    },
+    {
+      "method": "GET",
+      "path": "/cities"
+    },
+    {
+      "method": "GET",
+      "path": "/cities/:id"
+    },
+    {
+      "method": "POST",
+      "path": "/cities"
+    },
+    {
+      "method": "PUT",
+      "path": "/cities/:id"
+    },
+    {
+      "method": "DELETE",
+      "path": "/cities/:id"
+    },
+    {
+      "method": "POST",
+      "path": "/hsn-sac"
+    },
+    {
+      "method": "GET",
+      "path": "/hsn-sac"
+    },
+    {
+      "method": "GET",
+      "path": "/hsn-sac/csv-template"
+    },
+    {
+      "method": "POST",
+      "path": "/hsn-sac/csv-upload"
+    },
+    {
+      "method": "GET",
+      "path": "/hsn-sac/uploads"
+    },
+    {
+      "method": "GET",
+      "path": "/hsn-sac/:id"
+    },
+    {
+      "method": "PUT",
+      "path": "/hsn-sac/:id"
+    },
+    {
+      "method": "DELETE",
+      "path": "/hsn-sac/:id"
+    },
+    {
+      "method": "POST",
+      "path": "/uom"
+    },
+    {
+      "method": "GET",
+      "path": "/uom"
+    },
+    {
+      "method": "GET",
+      "path": "/uom/csv-template"
+    },
+    {
+      "method": "POST",
+      "path": "/uom/csv-upload"
+    },
+    {
+      "method": "GET",
+      "path": "/uom/uploads"
+    },
+    {
+      "method": "GET",
+      "path": "/uom/:id"
+    },
+    {
+      "method": "PUT",
+      "path": "/uom/:id"
+    },
+    {
+      "method": "DELETE",
+      "path": "/uom/:id"
+    },
+    {
+      "method": "POST",
+      "path": "/items"
+    },
+    {
+      "method": "GET",
+      "path": "/items"
+    },
+    {
+      "method": "GET",
+      "path": "/items/csv-template"
+    },
+    {
+      "method": "POST",
+      "path": "/items/csv-upload"
+    },
+    {
+      "method": "GET",
+      "path": "/items/uploads"
+    },
+    {
+      "method": "GET",
+      "path": "/currencies/csv-template"
+    },
+    {
+      "method": "POST",
+      "path": "/currencies/csv-upload"
+    },
+    {
+      "method": "GET",
+      "path": "/currencies/uploads"
+    },
+    {
+      "method": "GET",
+      "path": "/items/:id"
+    },
+    {
+      "method": "PUT",
+      "path": "/items/:id"
+    },
+    {
+      "method": "DELETE",
+      "path": "/items/:id"
+    },
+    {
+      "method": "GET",
+      "path": "/csv-uploads/:id"
+    },
+    {
+      "method": "GET",
+      "path": "/csv-uploads/:id/errors"
+    },
+    {
+      "method": "POST",
+      "path": "/service-types"
+    },
+    {
+      "method": "GET",
+      "path": "/service-types"
+    },
+    {
+      "method": "GET",
+      "path": "/service-types/:id"
+    },
+    {
+      "method": "PUT",
+      "path": "/service-types/:id"
+    },
+    {
+      "method": "DELETE",
+      "path": "/service-types/:id"
+    },
+    {
+      "method": "POST",
+      "path": "/service-categories"
+    },
+    {
+      "method": "GET",
+      "path": "/service-categories"
+    },
+    {
+      "method": "GET",
+      "path": "/service-categories/:id"
+    },
+    {
+      "method": "PUT",
+      "path": "/service-categories/:id"
+    },
+    {
+      "method": "DELETE",
+      "path": "/service-categories/:id"
+    },
+    {
+      "method": "POST",
+      "path": "/subsidiaries"
+    },
+    {
+      "method": "GET",
+      "path": "/subsidiaries"
+    },
+    {
+      "method": "GET",
+      "path": "/subsidiaries/:id"
+    },
+    {
+      "method": "PUT",
+      "path": "/subsidiaries/:id"
+    },
+    {
+      "method": "DELETE",
+      "path": "/subsidiaries/:id"
+    },
+    {
+      "method": "POST",
+      "path": "/account-types"
+    },
+    {
+      "method": "GET",
+      "path": "/account-types"
+    },
+    {
+      "method": "GET",
+      "path": "/account-types/:id"
+    },
+    {
+      "method": "PUT",
+      "path": "/account-types/:id"
+    },
+    {
+      "method": "DELETE",
+      "path": "/account-types/:id"
+    },
+    {
+      "method": "POST",
+      "path": "/chart-of-accounts"
+    },
+    {
+      "method": "GET",
+      "path": "/chart-of-accounts"
+    },
+    {
+      "method": "GET",
+      "path": "/chart-of-accounts/:id"
+    },
+    {
+      "method": "PUT",
+      "path": "/chart-of-accounts/:id"
+    },
+    {
+      "method": "DELETE",
+      "path": "/chart-of-accounts/:id"
+    },
+    {
+      "method": "POST",
+      "path": "/mis-types"
+    },
+    {
+      "method": "GET",
+      "path": "/mis-types"
+    },
+    {
+      "method": "GET",
+      "path": "/mis-types/:id"
+    },
+    {
+      "method": "POST",
+      "path": "/currencies"
+    },
+    {
+      "method": "GET",
+      "path": "/currencies"
+    },
+    {
+      "method": "GET",
+      "path": "/currencies/:id"
+    },
+    {
+      "method": "PUT",
+      "path": "/currencies/:id"
+    },
+    {
+      "method": "DELETE",
+      "path": "/currencies/:id"
+    },
+    {
+      "method": "GET",
+      "path": "/sites"
+    },
+    {
+      "method": "GET",
+      "path": "/sites/:id"
+    },
+    {
+      "method": "POST",
+      "path": "/transportation-modes"
+    },
+    {
+      "method": "GET",
+      "path": "/transportation-modes"
+    },
+    {
+      "method": "GET",
+      "path": "/transportation-modes/:id"
+    },
+    {
+      "method": "PUT",
+      "path": "/transportation-modes/:id"
+    },
+    {
+      "method": "DELETE",
+      "path": "/transportation-modes/:id"
+    },
+    {
+      "method": "POST",
+      "path": "/vendors"
+    },
+    {
+      "method": "GET",
+      "path": "/vendors"
+    },
+    {
+      "method": "GET",
+      "path": "/vendors/:id"
+    },
+    {
+      "method": "PUT",
+      "path": "/vendors/:id"
+    },
+    {
+      "method": "DELETE",
+      "path": "/vendors/:id"
+    },
+    {
+      "method": "POST",
+      "path": "/delivery-challan"
+    },
+    {
+      "method": "GET",
+      "path": "/delivery-challan"
+    },
+    {
+      "method": "GET",
+      "path": "/delivery-challan/:id"
+    },
+    {
+      "method": "PUT",
+      "path": "/delivery-challan/:id"
+    },
+    {
+      "method": "DELETE",
+      "path": "/delivery-challan/:id"
+    },
+    {
+      "method": "PATCH",
+      "path": "/delivery-challan/:id/status"
+    },
+    {
+      "method": "GET",
+      "path": "/delivery-challan/export/csv"
+    },
+    {
+      "method": "POST",
+      "path": "/work-category"
+    },
+    {
+      "method": "GET",
+      "path": "/work-category"
+    },
+    {
+      "method": "GET",
+      "path": "/work-category/:id"
+    },
+    {
+      "method": "PATCH",
+      "path": "/work-category/:id"
+    },
+    {
+      "method": "DELETE",
+      "path": "/work-category/:id"
+    },
+    {
+      "method": "GET",
+      "path": "/stores"
+    },
+    {
+      "method": "GET",
+      "path": "/stores/:id"
+    },
+    {
+      "method": "GET",
+      "path": "/system-logs"
+    },
+    {
+      "method": "GET",
+      "path": "/system-logs/stats"
+    },
+    {
+      "method": "GET",
+      "path": "/system-logs/filter-options"
+    },
+    {
+      "method": "GET",
+      "path": "/system-logs/:id"
+    },
+    {
+      "method": "DELETE",
+      "path": "/system-logs/:id"
+    },
+    {
+      "method": "POST",
+      "path": "/system-logs/cleanup"
+    }
+  ]
+}
