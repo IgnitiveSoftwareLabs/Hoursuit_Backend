@@ -88,7 +88,7 @@ app.set("trust proxy", "loopback");
 
   // 1. CORS MUST come before rate limiter to handle preflight requests
   const corsOptions = {
-    origin: "http://localhost:5173",
+    origin: process.env.FRONTEND_URL,
     credentials: true,
     methods: ["GET", "HEAD", "PUT", "PATCH", "POST", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization"],
