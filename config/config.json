@@ -1,8 +1,8 @@
 {
   "development": {
-    "username": "postgres",
-    "password": "1234",
-    "database": "Erp_New",
+    "username": "hoursuite_sandbox",
+    "password": "Sumeet@1363",
+    "database": "hoursuite_sandbox_db",
     "host": "127.0.0.1",
     "port": 5432,
     "dialect": "postgres"
