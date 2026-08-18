@@ -3,6 +3,7 @@ import asyncHandler from "express-async-handler";
 import { StatusCodes } from "http-status-codes";
 import { Op } from "sequelize";
 
+import ChartOfAccountMaster from "../../../../modals/masters/chartOfAccount/chartOfAccount";
 import { GRN, GRNLine } from "../../../../modals/Transactions/purchase/GRN";
 import { findCompanyForUser } from "../../../../utils/findCompanyForUser";
 import Warehouse from "../../../../modals/masters/warehouse/warehouse";
@@ -17,7 +18,6 @@ import {
 } from "../../../../modals/Transactions/purchase/purchaseOrder";
 import Godown from "../../../../modals/masters/godown/godown";
 import Stack from "../../../../modals/masters/stack/stack";
-import ChartOfAccountMaster from "../../../../modals/masters/chartOfAccount/chartOfAccount";
 import sequelize from "../../../../dbconfig/dbconfig";
 
 const normalizeOptionalId = (value: unknown) => {
@@ -205,18 +205,18 @@ const GRNController = {
             ];
         }
 
-        const { rows: grns, count: total } = await GRN.findAndCountAll({
+        const total = await GRN.count({ where: whereClause });
+        const grns = await GRN.findAll({
             where: whereClause,
             include: [
                 {
                     model: PurchaseOrder,
                     as: "purchaseOrder",
-                    attributes: ["id", "purchaseNo"],
+                    attributes: ["id", "purchaseNo", "vendor_id", "purchaseDate", "deliveryDate", "status"],
                 },
                 {
                     model: Warehouse,
                     as: "warehouse",
-                    // attributes: ["id", "warehouse_name"],
                 },
                 {
                     model: GRNLine,
@@ -260,7 +260,14 @@ const GRNController = {
                 {
                     model: PurchaseOrder,
                     as: "purchaseOrder",
-                    attributes: ["id", "purchaseNo"],
+                    attributes: ["id", "purchaseNo", "vendor_id", "purchaseDate", "deliveryDate", "status"],
+                    include: [
+                        {
+                            model: PurchaseOrderLine,
+                            as: "purchaseOrderLines",
+                            include: [itemIncludeConfig],
+                        },
+                    ],
                 },
                 {
                     model: Warehouse,

@@ -168,8 +168,8 @@ const JournalEntryController = {
     }
 
     const sourceMap: Record<string, string[]> = {
-      purchaseinvoice: ["PurchaseInvoice", "Purchase_Invoice", "Purchase Invoice", "GRN"],
-      purchasepayment: ["PurchasePayment", "PURCHASE_PAYMENT", "Purchase Payment"],
+      purchaseinvoice: ["PurchaseInvoice", "PURCHASE_INVOICE", "Purchase_Invoice", "Purchase Invoice"],
+      purchasepayment: ["PurchasePayment", "PURCHASE_PAYMENT", "Purchase_Payment", "Purchase Payment"],
       purchasereturn: ["PurchaseReturn", "PURCHASE_RETURN", "Purchase_Return", "Purchase Return"],
       grn: ["GRN", "Grn", "grn"],
       debitnote: ["DebitNote", "Debit_Note", "Debit Note"],

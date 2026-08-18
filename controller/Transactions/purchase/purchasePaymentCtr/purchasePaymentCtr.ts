@@ -268,7 +268,8 @@ const PurchasePaymentController = {
             whereClause.vendorId = Number(vendorId);
         }
 
-        const { rows: payments, count: total } = await PurchasePaymentHeader.findAndCountAll({
+        const total = await PurchasePaymentHeader.count({ where: whereClause });
+        const payments = await PurchasePaymentHeader.findAll({
             where: whereClause,
             include: [
                 {

@@ -183,7 +183,8 @@ const PurchaseReturnController = {
             whereClause.status = status;
         }
 
-        const { rows: returns, count: total } = await PurchaseReturnHeader.findAndCountAll({
+        const total = await PurchaseReturnHeader.count({ where: whereClause });
+        const returns = await PurchaseReturnHeader.findAll({
             where: whereClause,
             include: [
                 {

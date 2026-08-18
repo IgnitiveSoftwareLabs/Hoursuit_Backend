@@ -134,25 +134,67 @@ export const AccountingService = {
 
         const createOptions = transaction ? { transaction } : undefined;
 
-        // 2. Create Header matching the schema
-        const header = await JournalEntryHeader.create(
-            {
-                entry_no: entryNo,
-                entry_date: entryDate,
-                voucher_type_id: resolvedVoucherTypeId,
-                reference_no: referenceNo,
-                narration: narration,
-                source_id: sourceId ?? 1,
-                source_name: sourceName ?? "GRN" ,
-                status: "DRAFT",
-                total_debit: totalDebit,
-                total_credit: totalCredit,
+        // 2. Check if a JournalEntryHeader already exists for this source document
+        let header = await JournalEntryHeader.findOne({
+            where: {
                 CompanyId: companyId,
-                user_id: userId,
-                isActive: true,
+                source_id: sourceId ?? 1,
+                source_name: sourceName ?? "GRN",
             },
-            createOptions
-        );
+            transaction,
+        });
+
+        if (header) {
+            // Update existing header totals and date
+            await header.update(
+                {
+                    entry_date: entryDate,
+                    voucher_type_id: resolvedVoucherTypeId,
+                    reference_no: referenceNo,
+                    narration: narration,
+                    total_debit: totalDebit,
+                    total_credit: totalCredit,
+                    status: "DRAFT",
+                },
+                createOptions
+            );
+
+            // Remove existing lines so new lines replace them cleanly
+            await JournalEntryLine.destroy({
+                where: { journal_entry_id: header.id, CompanyId: companyId },
+                transaction,
+            });
+        } else {
+            // Ensure entry_no is unique per company
+            let uniqueEntryNo = entryNo;
+            const existingEntryNo = await JournalEntryHeader.findOne({
+                where: { CompanyId: companyId, entry_no: uniqueEntryNo },
+                transaction,
+            });
+
+            if (existingEntryNo) {
+                uniqueEntryNo = `${entryNo}-${Date.now()}`;
+            }
+
+            header = await JournalEntryHeader.create(
+                {
+                    entry_no: uniqueEntryNo,
+                    entry_date: entryDate,
+                    voucher_type_id: resolvedVoucherTypeId,
+                    reference_no: referenceNo,
+                    narration: narration,
+                    source_id: sourceId ?? 1,
+                    source_name: sourceName ?? "GRN",
+                    status: "DRAFT",
+                    total_debit: totalDebit,
+                    total_credit: totalCredit,
+                    CompanyId: companyId,
+                    user_id: userId,
+                    isActive: true,
+                },
+                createOptions
+            );
+        }
 
         // 3. Create Lines matching the schema
         const journalLines: JournalEntryLine[] = [];

@@ -25,11 +25,25 @@ import Stack from "../../../../modals/masters/stack/stack";
 import sequelize from "../../../../dbconfig/dbconfig";
 import { normalizePurchaseOrderStatus } from "../../../../utils/p2pStatus";
 
+import ChartOfAccountMaster from "../../../../modals/masters/chartOfAccount/chartOfAccount";
+
 const normalizeOptionalId = (value: unknown) => {
     if (value === null || value === "") {
         return null;
     }
     return Number(value);
+};
+
+const itemIncludeConfig = {
+    model: ItemMaster,
+    as: "item",
+    attributes: ["id", "item_code", "item_name", "item_desc", "track_inventory", "cost_price", "default_rate", "asset_account_id", "income_account_id", "cogs_account_id", "expense_account_id"],
+    include: [
+        { model: ChartOfAccountMaster, as: "asset_account", attributes: ["id", "account_number", "account_name"], include: [{ association: "accountType", attributes: ["id", "account_type_name"] }] },
+        { model: ChartOfAccountMaster, as: "income_account", attributes: ["id", "account_number", "account_name"], include: [{ association: "accountType", attributes: ["id", "account_type_name"] }] },
+        { model: ChartOfAccountMaster, as: "cogs_account", attributes: ["id", "account_number", "account_name"], include: [{ association: "accountType", attributes: ["id", "account_type_name"] }] },
+        { model: ChartOfAccountMaster, as: "expense_account", attributes: ["id", "account_number", "account_name"], include: [{ association: "accountType", attributes: ["id", "account_type_name"] }] },
+    ],
 };
 
 const PurchaseOrderController = {
@@ -246,14 +260,10 @@ const PurchaseOrderController = {
             ];
         }
 
-        const { rows: purchaseOrders, count: total } = await PurchaseOrder.findAndCountAll({
+        const total = await PurchaseOrder.count({ where: whereClause });
+        const purchaseOrders = await PurchaseOrder.findAll({
             where: whereClause,
             include: [
-                // {
-                //     model: Customer,
-                //     as: "customer",
-                //     attributes: ["id", "name", "contact", "email"],
-                // },
                 {
                     model: CityMaster,
                     as: "city",
@@ -284,11 +294,7 @@ const PurchaseOrderController = {
                     as: "purchaseOrderLines",
                     required: false,
                     include: [
-                        {
-                            model: ItemMaster,
-                            as: "item",
-                            attributes: ["id", "item_code", "item_name", "item_desc"],
-                        },
+                        itemIncludeConfig,
                         {
                             model: HSNSACMaster,
                             as: "hsnSac",
@@ -384,14 +390,10 @@ const PurchaseOrderController = {
                 },
                 {
                     model: PurchaseOrderLine,
-                    as: "lineItems",
+                    as: "purchaseOrderLines",
                     required: false,
                     include: [
-                        {
-                            model: ItemMaster,
-                            as: "item",
-                            attributes: ["id", "item_code", "item_name", "item_desc"],
-                        },
+                        itemIncludeConfig,
                         { model: HSNSACMaster, as: "hsnSac", attributes: ["id", "code"] },
                         { model: UOMMaster, as: "uom", attributes: ["id", "uom_name"] },
                         {
@@ -814,7 +816,7 @@ const PurchaseOrderController = {
         if (Object.keys(lineWhere).length > 0) {
             includeArr.push({
                 model: PurchaseOrderLine,
-                as: "lineItems",
+                as: "purchaseOrderLines",
                 where: lineWhere,
                 required: true,
                 include: [
@@ -840,7 +842,7 @@ const PurchaseOrderController = {
         } else {
             includeArr.push({
                 model: PurchaseOrderLine,
-                as: "lineItems",
+                as: "purchaseOrderLines",
                 include: [
                     {
                         model: ItemMaster,
@@ -863,8 +865,9 @@ const PurchaseOrderController = {
         const csvData: any[] = [];
 
         purchaseOrders.forEach((purchaseOrder: any) => {
-            if (purchaseOrder.lineItems && purchaseOrder.lineItems.length > 0) {
-                purchaseOrder.lineItems.forEach((lineItem: any) => {
+            const poLines = purchaseOrder.purchaseOrderLines || purchaseOrder.lineItems || [];
+            if (poLines.length > 0) {
+                poLines.forEach((lineItem: any) => {
                     csvData.push({
                         "Purchase Order Number": purchaseOrder.purchaseNo || "",
                         "Work Order No": purchaseOrder.work_order_no || "",

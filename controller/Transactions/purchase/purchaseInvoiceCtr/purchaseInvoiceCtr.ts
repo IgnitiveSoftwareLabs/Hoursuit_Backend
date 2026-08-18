@@ -319,7 +319,8 @@ const PurchaseInvoiceController = {
             whereClause.status = status;
         }
 
-        const { rows: invoices, count: total } = await PurchaseInvoiceHeader.findAndCountAll({
+        const total = await PurchaseInvoiceHeader.count({ where: whereClause });
+        const invoices = await PurchaseInvoiceHeader.findAll({
             where: whereClause,
             include: [
                 {
@@ -390,8 +391,22 @@ const PurchaseInvoiceController = {
                 {
                     model: PurchaseOrder,
                     as: "purchaseOrder",
-                    attributes: ["id", "purchaseNo"],
+                    attributes: ["id", "purchaseNo", "purchaseDate", "deliveryDate", "status"],
                     required: false,
+                },
+                {
+                    model: GRN,
+                    as: "grn",
+                    attributes: ["id", "grnNo", "grnDate", "status", "purchaseOrderId"],
+                    required: false,
+                    include: [
+                        {
+                            model: PurchaseOrder,
+                            as: "purchaseOrder",
+                            attributes: ["id", "purchaseNo"],
+                            required: false,
+                        },
+                    ],
                 },
                 {
                     model: VendorDetails,

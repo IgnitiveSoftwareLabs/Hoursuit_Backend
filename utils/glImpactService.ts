@@ -11,13 +11,214 @@ import GRN from "../modals/Transactions/purchase/GRN/GRNHeader";
 import ItemMaster from "../modals/masters/items/itemMaster";
 import ChartOfAccountMaster from "../modals/masters/chartOfAccount/chartOfAccount";
 
+/**
+ * Helper function to dynamically resolve Inventory Asset Account
+ */
+const resolveInventoryAssetAccount = async (
+  companyId: number,
+  item: ItemMaster,
+  transaction?: Transaction
+): Promise<number> => {
+  // If item has asset_account_id explicitly defined, return it
+  if (item.asset_account_id) return item.asset_account_id;
+
+  // Search ChartOfAccountMaster for Inventory / Stock Asset Account
+  const namedAssetAccount = await ChartOfAccountMaster.findOne({
+    where: {
+      CompanyId: companyId,
+      isActive: true,
+      [Op.or]: [
+        { account_name: { [Op.like]: "%Inventory%" } },
+        { account_name: { [Op.like]: "%Stock%" } },
+        { account_name: { [Op.like]: "%Asset%" } },
+      ],
+    },
+    transaction,
+  });
+
+  if (namedAssetAccount) return namedAssetAccount.id;
+
+  const typeAssetAccount = await ChartOfAccountMaster.findOne({
+    where: { CompanyId: companyId, isActive: true },
+    include: [
+      {
+        association: "accountType",
+        where: {
+          [Op.or]: [
+            { account_type_name: { [Op.like]: "%Inventory%" } },
+            { account_type_name: { [Op.like]: "%Stock%" } },
+            { account_type_name: { [Op.like]: "%Asset%" } },
+          ],
+        },
+      },
+    ],
+    transaction,
+  });
+
+  if (typeAssetAccount) return typeAssetAccount.id;
+
+  // Fallback to item.expense_account_id or item.cogs_account_id
+  const fallbackId = item.expense_account_id || item.cogs_account_id;
+  if (fallbackId) return fallbackId;
+
+  const fallback = await ChartOfAccountMaster.findOne({
+    where: { CompanyId: companyId, isActive: true },
+    transaction,
+  });
+
+  if (!fallback) {
+    throw new Error(`No Inventory Asset or Expense account found for Item "${item.item_name}".`);
+  }
+
+  return fallback.id;
+};
+
+/**
+ * Helper function to dynamically resolve GRNI / Accrued Purchases Liability Account
+ */
+const resolveGRNIAccount = async (
+  companyId: number,
+  explicitId?: number,
+  transaction?: Transaction
+): Promise<number> => {
+  if (explicitId) return explicitId;
+
+  // 1. Search by account_name (highest priority for GRNI / Accrued Purchase)
+  const namedAccount = await ChartOfAccountMaster.findOne({
+    where: {
+      CompanyId: companyId,
+      isActive: true,
+      [Op.or]: [
+        { account_name: { [Op.like]: "%Accrued Purchase%" } },
+        { account_name: { [Op.like]: "%GRNI%" } },
+        { account_name: { [Op.like]: "%Unbilled%" } },
+        { account_name: { [Op.like]: "%Goods Received%" } },
+        { account_name: { [Op.like]: "%Accrued Liability%" } },
+      ],
+    },
+    transaction,
+  });
+
+  if (namedAccount) return namedAccount.id;
+
+  // 2. Search by accountType (strictly Accrued/GRNI/Unbilled, NEVER Payable)
+  const grniAccount = await ChartOfAccountMaster.findOne({
+    where: { CompanyId: companyId, isActive: true },
+    include: [
+      {
+        association: "accountType",
+        where: {
+          [Op.or]: [
+            { account_type_name: { [Op.like]: "%Accrued%" } },
+            { account_type_name: { [Op.like]: "%GRNI%" } },
+            { account_type_name: { [Op.like]: "%Unbilled%" } },
+          ],
+        },
+      },
+    ],
+    order: [["id", "ASC"]],
+    transaction,
+  });
+
+  if (grniAccount) return grniAccount.id;
+
+  // 3. Fallback to any liability account excluding Payable
+  const liabilityAccount = await ChartOfAccountMaster.findOne({
+    where: {
+      CompanyId: companyId,
+      isActive: true,
+      account_name: { [Op.notLike]: "%Payable%" },
+    },
+    include: [
+      {
+        association: "accountType",
+        where: {
+          account_type_name: { [Op.like]: "%Liability%" },
+        },
+      },
+    ],
+    transaction,
+  });
+
+  if (liabilityAccount) return liabilityAccount.id;
+
+  const fallback = await ChartOfAccountMaster.findOne({
+    where: { CompanyId: companyId, isActive: true },
+    transaction,
+  });
+
+  if (!fallback) {
+    throw new Error(`No Chart of Accounts found for company ID ${companyId} to resolve GRNI Account.`);
+  }
+
+  return fallback.id;
+};
+
+/**
+ * Helper function to dynamically resolve Accounts Payable (AP) Liability Account
+ */
+const resolveAPAccount = async (
+  companyId: number,
+  explicitId?: number,
+  transaction?: Transaction
+): Promise<number> => {
+  if (explicitId) return explicitId;
+
+  const apAccount = await ChartOfAccountMaster.findOne({
+    where: { CompanyId: companyId, isActive: true },
+    include: [
+      {
+        association: "accountType",
+        where: {
+          [Op.or]: [
+            { account_type_name: { [Op.like]: "%Payable%" } },
+            { account_type_name: { [Op.like]: "%Vendor%" } },
+            { account_type_name: { [Op.like]: "%Creditor%" } },
+            { account_type_name: { [Op.like]: "%Liability%" } },
+          ],
+        },
+      },
+    ],
+    order: [["id", "ASC"]],
+    transaction,
+  });
+
+  if (apAccount) return apAccount.id;
+
+  const namedAccount = await ChartOfAccountMaster.findOne({
+    where: {
+      CompanyId: companyId,
+      isActive: true,
+      [Op.or]: [
+        { account_name: { [Op.like]: "%Payable%" } },
+        { account_name: { [Op.like]: "%Vendor%" } },
+        { account_name: { [Op.like]: "%Creditor%" } },
+      ],
+    },
+    transaction,
+  });
+
+  if (namedAccount) return namedAccount.id;
+
+  const fallback = await ChartOfAccountMaster.findOne({
+    where: { CompanyId: companyId, isActive: true },
+    transaction,
+  });
+
+  if (!fallback) {
+    throw new Error(`No Chart of Accounts found for company ID ${companyId} to resolve Accounts Payable Account.`);
+  }
+
+  return fallback.id;
+};
+
 export const GLImpactService = {
   /**
    * Calculates Debit/Credit impact for GRN (Goods Receipt Note)
    *
-   * Purely Dynamic Account Resolution:
-   *   DEBIT  : Item Asset Account (item.asset_account_id) || Expense Account (item.expense_account_id)
-   *   CREDIT : Explicit grniAccountId || Item Expense Account (item.expense_account_id) || COGS Account (item.cogs_account_id)
+   * NetSuite Accounting Rules:
+   *   DEBIT  : Inventory Asset Account (item.asset_account_id or COA Inventory/Stock Asset)
+   *   CREDIT : GRNI / Accrued Purchase Liability Account (grniAccountId or dynamic COA lookup)
    */
   calculateGRNImpact: async (
     source_name: string,
@@ -47,12 +248,10 @@ export const GLImpactService = {
     let totalGRNValue = 0;
     const grnLines = ((grn as any).lineItems || []) as any[];
 
-    let fallbackCreditAccount: number | undefined = grniAccountId;
-
     for (const lineItem of grnLines) {
       const rate = Number(lineItem.purchaseOrderLine?.rate || 0);
       const qty = Number(lineItem.acceptedQty > 0 ? lineItem.acceptedQty : lineItem.receivedQty);
-      const amount = qty * rate;
+      const amount = Number((qty * rate).toFixed(2));
 
       if (amount <= 0) continue;
       totalGRNValue += amount;
@@ -63,20 +262,8 @@ export const GLImpactService = {
         throw new Error(`Item Master record missing for GRN Line #${lineItem.id}`);
       }
 
-      // Debit account dynamically from ItemMaster
-      const debitAccountId = item.asset_account_id || item.expense_account_id;
-
-      if (!debitAccountId) {
-        throw new Error(
-          `Item "${item.item_name}" (Code: ${item.item_code || item.id}) does not have an Asset Account or Expense Account configured in Item Master.`
-        );
-      }
-
-      // Track candidate credit clearing account from item if grniAccountId was not passed
-      if (!fallbackCreditAccount) {
-        fallbackCreditAccount = (item.expense_account_id || item.cogs_account_id) || undefined;
-      }
-
+      // Debit account dynamically resolved: Inventory Asset Account
+      const debitAccountId = await resolveInventoryAssetAccount(companyId, item, transaction);
       const accountName = await resolveAccountName(debitAccountId, transaction);
 
       lines.push({
@@ -87,16 +274,10 @@ export const GLImpactService = {
       });
     }
 
-    // CREDIT: Accrued Liability / GRNI Account
+    // CREDIT: GRNI / Accrued Purchases Liability Account
+    totalGRNValue = Number(totalGRNValue.toFixed(2));
     if (totalGRNValue > 0) {
-      const creditAccountId = fallbackCreditAccount;
-
-      if (!creditAccountId) {
-        throw new Error(
-          `No clearing/liability account ID available for GRN #${grn.id}. Please specify an Expense/COGS Account on the Item Master or pass grniAccountId.`
-        );
-      }
-
+      const creditAccountId = await resolveGRNIAccount(companyId, grniAccountId, transaction);
       const grniAccountName = await resolveAccountName(creditAccountId, transaction);
 
       lines.push({
@@ -158,10 +339,15 @@ export const GLImpactService = {
   /**
    * Calculates Debit/Credit impact for Purchase Invoice (Vendor Bill)
    *
-   * Purely Dynamic Account Resolution:
-   *   DEBIT  : Explicit grniAccountId || Item Expense Account || Item Asset Account
-   *   CREDIT : Explicit apAccountId || Item COGS Account || Item Expense Account
-   *   DEBIT TAX: Explicit taxAccountId
+   * NetSuite Accounting Rules:
+   *   When linked to GRN (Goods Received Previously):
+   *     DEBIT  : GRNI / Accrued Purchase Liability Account (clears GRNI liability created at GRN)
+   *     DEBIT  : Input Tax Account (GST / Duties & Taxes)
+   *     CREDIT : Accounts Payable Liability Account
+   *   When direct bill (No GRN):
+   *     DEBIT  : Item Asset Account OR Expense Account
+   *     DEBIT  : Input Tax Account
+   *     CREDIT : Accounts Payable Liability Account
    */
   calculatePurchaseInvoiceImpact: async (
     invoiceId: number,
@@ -189,13 +375,14 @@ export const GLImpactService = {
     const invLines = ((invoice as any).purchaseInvoiceLines || []) as any[];
 
     let totalLineTax = 0;
-    let fallbackApAccount: number | undefined = apAccountId;
+    const isGRNLinked = Boolean((invoice as any).grnHeaderId || invLines.some((l: any) => l.grnLineId));
+    const resolvedGRNIAccountId = await resolveGRNIAccount(companyId, grniAccountId, transaction);
 
     for (const invLine of invLines) {
       const qty = Number(invLine.quantity || 0);
       const unitPrice = Number(invLine.unitPrice || 0);
       const discount = Number(invLine.discountAmount || 0);
-      const taxableLineAmount = qty * unitPrice - discount;
+      const taxableLineAmount = Number((qty * unitPrice - discount).toFixed(2));
       const lineTax = Number(invLine.taxAmount || 0);
 
       totalLineTax += lineTax;
@@ -206,18 +393,15 @@ export const GLImpactService = {
         throw new Error(`Item Master record missing for Invoice Line #${invLine.id}`);
       }
 
-      if (!fallbackApAccount) {
-        fallbackApAccount = (item.cogs_account_id || item.expense_account_id) || undefined;
-      }
-
       let debitAccountId: number | undefined;
 
-      if (invLine.grnLineId || (invoice as any).grnHeaderId) {
-        // Linked to GRN — Debit clearing account (grniAccountId or item's expense account)
-        debitAccountId = grniAccountId || (item.expense_account_id || item.asset_account_id) || undefined;
+      if (isGRNLinked) {
+        // Linked to GRN — Debit GRNI Account (clearing receiving accrual liability)
+        debitAccountId = resolvedGRNIAccountId;
+      } else if (item.track_inventory) {
+        debitAccountId = (item.asset_account_id || item.expense_account_id) || resolvedGRNIAccountId;
       } else {
-        // Direct Invoice — Debit item's asset or expense account
-        debitAccountId = (item.asset_account_id || item.expense_account_id) || undefined;
+        debitAccountId = (item.expense_account_id || item.asset_account_id) || resolvedGRNIAccountId;
       }
 
       if (!debitAccountId) {
@@ -233,18 +417,17 @@ export const GLImpactService = {
           account_id: debitAccountId,
           debit_amount: taxableLineAmount,
           credit_amount: 0,
-          narration: `Purchase Invoice: ${item.item_name} [A/C: ${debitAccountName}] (Qty: ${qty})`
+          narration: `Purchase Invoice (${isGRNLinked ? "GRNI Clearing" : "Direct"}): ${item.item_name} [A/C: ${debitAccountName}] (Qty: ${qty})`
         });
       }
     }
 
     // DEBIT: Input Tax Account
-    const finalTaxAmount = totalLineTax > 0 ? totalLineTax : Number((invoice as any).taxAmount || 0);
+    const finalTaxAmount = Number((totalLineTax > 0 ? totalLineTax : Number((invoice as any).taxAmount || 0)).toFixed(2));
     if (finalTaxAmount > 0) {
       let resolvedTaxAccountId = taxAccountId;
 
       if (!resolvedTaxAccountId) {
-        // Look up Tax/Duties account in Chart of Accounts
         const taxAccount = await ChartOfAccountMaster.findOne({
           where: { CompanyId: companyId, isActive: true },
           include: [
@@ -266,7 +449,6 @@ export const GLImpactService = {
         if (taxAccount) {
           resolvedTaxAccountId = taxAccount.id;
         } else {
-          // Fallback: use first line item's expense account or asset account
           const firstLineItem = invLines[0]?.item as ItemMaster | undefined;
           resolvedTaxAccountId = firstLineItem?.expense_account_id || firstLineItem?.asset_account_id || undefined;
         }
@@ -291,14 +473,7 @@ export const GLImpactService = {
     // CREDIT: Accounts Payable (Vendor) Account
     const totalAmount = Number(invoice.totalAmount || 0);
     if (totalAmount > 0) {
-      const creditAccountId = fallbackApAccount;
-
-      if (!creditAccountId) {
-        throw new Error(
-          `No Accounts Payable / Credit Account ID available for Invoice #${invoice.invoiceNumber}. Please configure an account on Item Master or pass apAccountId.`
-        );
-      }
-
+      const creditAccountId = await resolveAPAccount(companyId, apAccountId, transaction);
       const apAccountName = await resolveAccountName(creditAccountId, transaction);
 
       lines.push({
@@ -362,9 +537,9 @@ export const GLImpactService = {
   /**
    * Calculates Debit/Credit impact for Purchase Payment (Vendor Payment)
    *
-   * Purely Dynamic Account Resolution:
-   *   DEBIT  : Explicit apAccountId
-   *   CREDIT : Explicit cashBankAccountId || payment.bankAccountId
+   * NetSuite Accounting Rules:
+   *   DEBIT  : Accounts Payable Account (reduces vendor liability)
+   *   CREDIT : Bank / Cash Account (reduces cash/bank asset)
    */
   calculatePurchasePaymentImpact: async (
     paymentId: number,
@@ -383,50 +558,11 @@ export const GLImpactService = {
     const amount = Number(payment.totalAmount || 0);
     if (amount <= 0) return [];
 
-    let resolvedApAccountId = apAccountId;
-
-    // Auto-resolve Accounts Payable Account ID if not explicitly provided
-    if (!resolvedApAccountId) {
-      const apAccount = await ChartOfAccountMaster.findOne({
-        where: { CompanyId: companyId, isActive: true },
-        include: [
-          {
-            association: "accountType",
-            where: {
-              account_type_name: {
-                [Op.or]: [
-                  { [Op.like]: "%Payable%" },
-                  { [Op.like]: "%Vendor%" },
-                  { [Op.like]: "%Liability%" },
-                ],
-              },
-            },
-          },
-        ],
-        transaction,
-      });
-
-      if (apAccount) {
-        resolvedApAccountId = apAccount.id;
-      } else {
-        const fallbackAcc = await ChartOfAccountMaster.findOne({
-          where: { CompanyId: companyId, isActive: true },
-          transaction,
-        });
-        if (fallbackAcc) resolvedApAccountId = fallbackAcc.id;
-      }
-    }
-
-    if (!resolvedApAccountId) {
-      throw new Error(
-        `Accounts Payable Account ID is required for Payment #${payment.paymentNumber}.`
-      );
-    }
+    const resolvedApAccountId = await resolveAPAccount(companyId, apAccountId, transaction);
     const apAccountName = await resolveAccountName(resolvedApAccountId, transaction);
 
     let bankAccId = cashBankAccountId || (payment.bankAccountId ? payment.bankAccountId : undefined);
 
-    // Auto-resolve Bank/Cash Account ID if not explicitly provided
     if (!bankAccId) {
       const bankAccount = await ChartOfAccountMaster.findOne({
         where: { CompanyId: companyId, isActive: true },
@@ -463,6 +599,7 @@ export const GLImpactService = {
         `Bank/Cash Account ID is required for Payment #${payment.paymentNumber}. Please select a bank account.`
       );
     }
+
     const bankAccountName = await resolveAccountName(bankAccId, transaction);
 
     const lines: GLLineInput[] = [
@@ -531,9 +668,9 @@ export const GLImpactService = {
   /**
    * Calculates Debit/Credit impact for Purchase Return (Vendor Return)
    *
-   * Purely Dynamic Account Resolution:
-   *   DEBIT  : Explicit apAccountId || item.cogs_account_id || item.expense_account_id
-   *   CREDIT : item.asset_account_id || item.expense_account_id
+   * NetSuite Accounting Rules:
+   *   DEBIT  : Accounts Payable Account (or GRNI Account)
+   *   CREDIT : Item Asset Account (if inventory item) OR Item Expense Account
    */
   calculatePurchaseReturnImpact: async (
     returnId: number,
@@ -558,12 +695,11 @@ export const GLImpactService = {
     const lines: GLLineInput[] = [];
     const returnLines = ((purchaseReturn as any).purchaseReturnLines || []) as any[];
     let totalReturnValue = 0;
-    let fallbackApAccount: number | undefined = apAccountId;
 
     for (const line of returnLines) {
       const qty = Number(line.returnQty || 0);
       const price = Number(line.unitPrice || 0);
-      const amount = qty * price;
+      const amount = Number((qty * price).toFixed(2));
 
       if (amount <= 0) continue;
       totalReturnValue += amount;
@@ -574,11 +710,12 @@ export const GLImpactService = {
         throw new Error(`Item Master record missing for Return Line #${line.id}`);
       }
 
-      if (!fallbackApAccount) {
-        fallbackApAccount = (item.cogs_account_id || item.expense_account_id) || undefined;
+      let creditAccountId: number | undefined;
+      if (item.track_inventory) {
+        creditAccountId = (item.asset_account_id || item.expense_account_id) || undefined;
+      } else {
+        creditAccountId = (item.expense_account_id || item.asset_account_id) || undefined;
       }
-
-      const creditAccountId = (item.asset_account_id || item.expense_account_id) || undefined;
 
       if (!creditAccountId) {
         throw new Error(
@@ -596,16 +733,10 @@ export const GLImpactService = {
       });
     }
 
-    // DEBIT: Accounts Payable (Vendor Account)
+    // DEBIT: Accounts Payable Account (or GRNI Account)
+    totalReturnValue = Number(totalReturnValue.toFixed(2));
     if (totalReturnValue > 0) {
-      const debitAccountId = fallbackApAccount;
-
-      if (!debitAccountId) {
-        throw new Error(
-          `No Accounts Payable / Debit Account ID available for Return #${purchaseReturn.returnNumber}. Please configure an account on Item Master or pass apAccountId.`
-        );
-      }
-
+      const debitAccountId = await resolveAPAccount(companyId, apAccountId, transaction);
       const apAccountName = await resolveAccountName(debitAccountId, transaction);
 
       lines.unshift({
@@ -662,3 +793,4 @@ export const GLImpactService = {
     );
   }
 };
+
