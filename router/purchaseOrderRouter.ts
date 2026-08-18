@@ -1,6 +1,6 @@
 import express from "express";
 import PurchaseOrderController from "../controller/Transactions/purchase/purchaseOrderCtr/purchaseOrderCtr";
-import validateGodownStack from "../middleware/validateGodownStack";
+// import validateGodownStack from "../middleware/validateGodownStack";
 import verifyToken from "../middleware/auth/verifyToken";
 
 const purchaseOrderRouter = express.Router();

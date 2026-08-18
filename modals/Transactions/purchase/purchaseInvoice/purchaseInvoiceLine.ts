@@ -183,32 +183,48 @@ PurchaseInvoiceLine.init(
     }
 );
 
+// PurchaseInvoiceLine.belongsTo(PurchaseInvoiceHeader, {
+//     foreignKey: "invoiceHeaderId",
+//     as: "invoiceHeader",
+// });
+
 PurchaseInvoiceLine.belongsTo(Company, {
     foreignKey: "CompanyId",
     as: "company",
     onDelete: "CASCADE",
 });
+
 Company.hasMany(PurchaseInvoiceLine, {
     foreignKey: "CompanyId",
     as: "purchaseInvoiceLines",
 });
+
+PurchaseInvoiceLine.belongsTo(GRNLine, {
+    foreignKey: "grnLineId",
+    as: "grnLine",
+    onDelete: "SET NULL",
+});
+GRNLine.hasMany(PurchaseInvoiceLine, {
+    foreignKey: "grnLineId",
+    as: "purchaseInvoiceLines",
+});
+
+PurchaseInvoiceLine.belongsTo(User, {
+    foreignKey: "user_id",
+    as: "user",
+    onDelete: "CASCADE",
+});
+
 User.hasMany(PurchaseInvoiceLine, {
     foreignKey: "user_id",
     as: "purchaseInvoiceLines",
 });
-PurchaseInvoiceLine.belongsTo(User, { foreignKey: "user_id", as: "user", onDelete: "CASCADE" });
-PurchaseInvoiceLine.belongsTo(PurchaseInvoiceHeader, {
-    foreignKey: "invoiceHeaderId",
-    as: "invoiceHeader",
-});
-PurchaseInvoiceLine.belongsTo(PurchaseOrderLine, {
-    foreignKey: "poLineId",
-    as: "poLine",
-});
-PurchaseInvoiceLine.belongsTo(GRNLine, {
-    foreignKey: "grnLineId",
-    as: "grnLine",
-});
+
+// PurchaseInvoiceLine.belongsTo(GRNLine, {
+//     foreignKey: "grnLineId",
+//     as: "grnLine",
+// });
+
 PurchaseInvoiceLine.belongsTo(ItemMaster, {
     foreignKey: "itemId",
     as: "item",

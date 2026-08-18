@@ -1,6 +1,7 @@
 import { Response } from "express";
 import asyncHandler from "express-async-handler";
 import { StatusCodes } from "http-status-codes";
+import { Op } from "sequelize";
 
 import JournalEntryHeader from "../../../modals/finance/journalEntryHeader";
 import { postJournalEntryToGL } from "../../../utils/postJournalEntryToGL";
@@ -166,12 +167,58 @@ const JournalEntryController = {
       throw new Error("Unauthorized: Company not found for user");
     }
 
-    const entry = await JournalEntryHeader.findOne({
-      where: {
-        CompanyId: company.id,
+    const sourceMap: Record<string, string[]> = {
+      purchaseinvoice: ["PurchaseInvoice", "Purchase_Invoice", "Purchase Invoice", "GRN"],
+      purchasepayment: ["PurchasePayment", "PURCHASE_PAYMENT", "Purchase Payment"],
+      purchasereturn: ["PurchaseReturn", "PURCHASE_RETURN", "Purchase_Return", "Purchase Return"],
+      grn: ["GRN", "Grn", "grn"],
+      debitnote: ["DebitNote", "Debit_Note", "Debit Note"],
+    };
+
+    const normalizedKey = String(source || "").toLowerCase().replace(/[\s_]/g, "");
+    const possibleSourceNames = sourceMap[normalizedKey] || [source];
+
+    const whereClause: any = {
+      CompanyId: company.id,
+      [Op.or]: [
+        {
+          source_id: Number(id),
+          source_name: { [Op.in]: possibleSourceNames },
+        },
+      ],
+    };
+
+    if (normalizedKey === "purchaseinvoice") {
+      whereClause[Op.or].push({
         source_id: Number(id),
-        source_name: source,
-      },
+        entry_no: { [Op.like]: "JE-INV-%" },
+      });
+      whereClause[Op.or].push({
+        source_id: Number(id),
+        narration: { [Op.like]: "%Purchase Invoice%" },
+      });
+    } else if (normalizedKey === "purchasepayment") {
+      whereClause[Op.or].push({
+        source_id: Number(id),
+        entry_no: { [Op.like]: "JE-PAY-%" },
+      });
+      whereClause[Op.or].push({
+        source_id: Number(id),
+        narration: { [Op.like]: "%Purchase Payment%" },
+      });
+    } else if (normalizedKey === "purchasereturn") {
+      whereClause[Op.or].push({
+        source_id: Number(id),
+        entry_no: { [Op.like]: "JE-RET-%" },
+      });
+      whereClause[Op.or].push({
+        source_id: Number(id),
+        narration: { [Op.like]: "%Purchase Return%" },
+      });
+    }
+
+    const entry = await JournalEntryHeader.findOne({
+      where: whereClause,
       include: [
         {
           association: "voucherType",
@@ -187,11 +234,16 @@ const JournalEntryController = {
           ],
         },
       ],
+      order: [["id", "DESC"]],
     });
 
     if (!entry) {
-      res.status(StatusCodes.NOT_FOUND);
-      throw new Error("Journal entry not found");
+      res.status(StatusCodes.OK).json({
+        message: "No GL postings recorded for this document yet.",
+        success: true,
+        result: null,
+      });
+      return;
     }
 
     res.status(StatusCodes.OK).json({

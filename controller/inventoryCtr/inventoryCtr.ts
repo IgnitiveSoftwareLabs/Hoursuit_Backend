@@ -14,11 +14,9 @@ import InventoryCount from '../../modals/inventory/inventory';
 import UOMMaster from '../../modals/masters/UOM/UOMMaster';
 import Godown from '../../modals/masters/godown/godown';
 import Stack from '../../modals/masters/stack/stack';
+import ChartOfAccountMaster from '../../modals/masters/chartOfAccount/chartOfAccount';
+import AccountTypeMaster from '../../modals/platform/accountType/accountType';
 import Company from '../../modals/company/company';
-
-// import MaterialStatus from '../../modals/VWMS/MaterialStatus';
-// import SiteMaster from '../../modals/VWMS/SiteMaster';
-// import CityMaster from '../../modals/masters/';
 
 interface CustomRequest extends Request {
     user?: any;
@@ -94,10 +92,42 @@ const InventoryController = {
             whereClause.StackId = stackId;
         }
 
+        const itemIncludeConfig = {
+            model: ItemMaster,
+            as: "item",
+            include: [
+                {
+                    model: ChartOfAccountMaster,
+                    as: "asset_account",
+                    attributes: ["id", "account_number", "account_name"],
+                    include: [{ model: AccountTypeMaster, as: "accountType", attributes: ["id", "account_type_name"] }],
+                },
+                {
+                    model: ChartOfAccountMaster,
+                    as: "income_account",
+                    attributes: ["id", "account_number", "account_name"],
+                    include: [{ model: AccountTypeMaster, as: "accountType", attributes: ["id", "account_type_name"] }],
+                },
+                {
+                    model: ChartOfAccountMaster,
+                    as: "cogs_account",
+                    attributes: ["id", "account_number", "account_name"],
+                    include: [{ model: AccountTypeMaster, as: "accountType", attributes: ["id", "account_type_name"] }],
+                },
+                {
+                    model: ChartOfAccountMaster,
+                    as: "expense_account",
+                    attributes: ["id", "account_number", "account_name"],
+                    include: [{ model: AccountTypeMaster, as: "accountType", attributes: ["id", "account_type_name"] }],
+                },
+            ],
+        };
+
         // Define includes
         const includes = [
+            itemIncludeConfig,
+            { model: UOMMaster, as: "uom", attributes: ["id", "uom_name"] },
             { model: Customer, as: "customer" },
-            //   { model: Commodity, as: "commodity" },
             { model: Warehouse, as: "warehouse" },
             { model: Godown, as: "godown" },
             { model: Stack, as: "stackDetails" },
@@ -112,11 +142,11 @@ const InventoryController = {
                 ...whereClause,
                 [Op.or]: [
                     InventoryCount.sequelize!.literal(`EXISTS (
+            SELECT 1 FROM item_masters im WHERE im.id = InventoryCount.item_id AND (im.item_name LIKE '%${searchTerm}%' OR im.item_code LIKE '%${searchTerm}%')
+          )`),
+                    InventoryCount.sequelize!.literal(`EXISTS (
             SELECT 1 FROM customers c WHERE c.id = InventoryCount.customer_id AND c.name LIKE '%${searchTerm}%'
           )`),
-                    //             InventoryCount.sequelize!.literal(`EXISTS (
-                    //     SELECT 1 FROM commodity_master cm WHERE cm.commodity_id = InventoryCount.commodity_id AND cm.name LIKE '%${searchTerm}%'
-                    //   )`),
                     InventoryCount.sequelize!.literal(`EXISTS (
             SELECT 1 FROM godowns g WHERE g.id = InventoryCount.godown_id AND g.name LIKE '%${searchTerm}%'
           )`),
@@ -138,28 +168,20 @@ const InventoryController = {
         });
 
         // Calculate statistics for ALL inventory (not just current page)
-        const allInventoryForStats = await InventoryCount.findAll({
+        const statsAggregates = await InventoryCount.findOne({
             where: finalWhereClause,
-            include: includes,
             attributes: [
-                // 'measurment_or_weight',
-                // 'total_cost_of_goods', 
-                // 'details_of_number_of_bags_sacks',
-                // 'available_bags_count'
-            ]
+                [InventoryCount.sequelize!.fn('SUM', InventoryCount.sequelize!.col('qty')), 'totalQty'],
+                [InventoryCount.sequelize!.fn('SUM', InventoryCount.sequelize!.col('amount')), 'totalValue'],
+            ],
+            raw: true,
         });
 
-        // Calculate dynamic stats
-        const stats = {
-            totalItems,
-            //   totalWeight: allInventoryForStats.reduce((sum, item) => sum + parseFloat(item.?.toString() || '0'), 0),
-            //   totalValue: allInventoryForStats.reduce((sum, item) => sum + parseFloat(item.total_cost_of_goods?.toString() || '0'), 0),
-            //   totalBags: allInventoryForStats.reduce((sum, item) => sum + parseInt(item.details_of_number_of_bags_sacks?.toString() || '0', 10), 0),
-            //   availableBags: allInventoryForStats.reduce((sum, item) => sum + parseInt(item.available_bags_count?.toString() || '0', 10), 0),
-        };
+        const overallQty = parseFloat((statsAggregates as any)?.totalQty || '0').toFixed(2);
+        const overallValue = parseFloat((statsAggregates as any)?.totalValue || '0').toFixed(2);
 
         // Get location breakdown (warehouse-wise summary)
-        const locationBreakdown = await InventoryCount.findAll({
+        const locationBreakdownRaw = await InventoryCount.findAll({
             where: finalWhereClause,
             include: [
                 {
@@ -189,12 +211,20 @@ const InventoryController = {
                         'SUM',
                         InventoryCount.sequelize!.col('amount')
                     ),
-                    'totalAmount'
+                    'totalValue'
                 ]
             ],
-            group: ['warehouseId', 'warehouse.id'],
+            group: ['warehouseId', 'warehouse.id', 'warehouse.name'],
             raw: false,
         });
+
+        const locationBreakdown = locationBreakdownRaw.map((loc: any) => ({
+            warehouseId: loc.warehouseId,
+            warehouseName: loc.warehouse?.name || 'Unknown',
+            itemCount: parseInt(loc.get('itemCount') || '0', 10),
+            totalQty: parseFloat(loc.get('totalQty') || '0').toFixed(2),
+            totalValue: parseFloat(loc.get('totalValue') || '0').toFixed(2),
+        }));
 
         // Calculate pagination info
         const totalPages = Math.ceil(totalItems / pageSize);
@@ -215,16 +245,11 @@ const InventoryController = {
                     hasPrevPage,
                 },
                 stats: {
-                    ...stats,
+                    totalItems,
+                    totalQty: overallQty,
+                    totalValue: overallValue,
                     uniqueWarehouses: locationBreakdown.length,
-                    locationBreakdown: locationBreakdown.map((loc: any) => ({
-                        warehouseId: loc.warehouseId,
-                        warehouseName: loc.warehouse?.name || 'Unknown',
-                        itemCount: parseInt(loc.get('itemCount'), 10),
-                        totalWeight: parseFloat(loc.get('totalWeight') || '0').toFixed(2),
-                        totalBags: parseInt(loc.get('totalBags') || '0', 10),
-                        totalValue: parseFloat(loc.get('totalValue') || '0').toFixed(2),
-                    }))
+                    locationBreakdown,
                 }
             }
         });
@@ -236,9 +261,39 @@ const InventoryController = {
 
         const inventory = await InventoryCount.findByPk(id, {
             include: [
-                { model: Customer, as: "customer", },
-                // { model: Commodity, as: "commodity", },
-                { model: Company, as: "company", },
+                {
+                    model: ItemMaster,
+                    as: "item",
+                    include: [
+                        {
+                            model: ChartOfAccountMaster,
+                            as: "asset_account",
+                            attributes: ["id", "account_number", "account_name"],
+                            include: [{ model: AccountTypeMaster, as: "accountType", attributes: ["id", "account_type_name"] }],
+                        },
+                        {
+                            model: ChartOfAccountMaster,
+                            as: "income_account",
+                            attributes: ["id", "account_number", "account_name"],
+                            include: [{ model: AccountTypeMaster, as: "accountType", attributes: ["id", "account_type_name"] }],
+                        },
+                        {
+                            model: ChartOfAccountMaster,
+                            as: "cogs_account",
+                            attributes: ["id", "account_number", "account_name"],
+                            include: [{ model: AccountTypeMaster, as: "accountType", attributes: ["id", "account_type_name"] }],
+                        },
+                        {
+                            model: ChartOfAccountMaster,
+                            as: "expense_account",
+                            attributes: ["id", "account_number", "account_name"],
+                            include: [{ model: AccountTypeMaster, as: "accountType", attributes: ["id", "account_type_name"] }],
+                        },
+                    ],
+                },
+                { model: UOMMaster, as: "uom", attributes: ["id", "uom_name", "uom_code"] },
+                { model: Customer, as: "customer" },
+                { model: Company, as: "company" },
                 { model: Warehouse, as: "warehouse" },
                 { model: Godown, as: "godown" },
                 { model: Stack, as: "stackDetails" },
@@ -494,49 +549,49 @@ const InventoryController = {
 
         const { count, rows } = await InventoryCount.findAndCountAll({
             where: whereClause,
-            // include: [
-            //     {
-            //         model: ItemMaster,
-            //         as: 'item',
-            //         attributes: ['id', 'item_name']
-            //     },
-            //     {
-            //         model: UOMMaster,
-            //         as: 'uom',
-            //         attributes: ['id', 'uom_name']
-            //     },
-            //     {
-            //         model: Customer,
-            //         as: 'customer',
-            //         attributes: ['id', 'name']
-            //     }
-            //     ,
-            //     // {
-            //     //     model: StoreMaster,
-            //     //     as: 'store',
-            //     //     attributes: ['id', 'store_name']
-            //     // }
-            //     ,
-            //     {
-            //         model: WorkCategory,
-            //         as: 'workCategory',
-            //         attributes: ['id', 'work_category_name']
-            //     }, 
-            //     // {
-            //     //     model: MaterialStatus,
-            //     //     as: 'materialStatus',
-            //     // },
-            //     // {
-            //     //     model: CityMaster,
-            //     //     as: 'city',
-            //     //     attributes: ['id', 'city_name']
-            //     // },
-            //     // {
-            //     //     model: SiteMaster,
-            //     //     as: 'site',
-            //     //     attributes: ['id', 'site_name']
-            //     // }
-            // ],
+            include: [
+                {
+                    model: ItemMaster,
+                    as: 'item',
+                    attributes: ['id', 'item_code', 'item_name', 'item_desc', 'cost_price', 'default_rate', 'asset_account_id', 'income_account_id', 'cogs_account_id', 'expense_account_id'],
+                    include: [
+                        { model: ChartOfAccountMaster, as: "asset_account", attributes: ["id", "account_number", "account_name"], include: [{ association: "accountType", attributes: ["id", "account_type_name"] }] },
+                        { model: ChartOfAccountMaster, as: "income_account", attributes: ["id", "account_number", "account_name"], include: [{ association: "accountType", attributes: ["id", "account_type_name"] }] },
+                        { model: ChartOfAccountMaster, as: "cogs_account", attributes: ["id", "account_number", "account_name"], include: [{ association: "accountType", attributes: ["id", "account_type_name"] }] },
+                        { model: ChartOfAccountMaster, as: "expense_account", attributes: ["id", "account_number", "account_name"], include: [{ association: "accountType", attributes: ["id", "account_type_name"] }] },
+                    ],
+                },
+                {
+                    model: UOMMaster,
+                    as: 'uom',
+                    attributes: ['id', 'uom_name']
+                },
+                {
+                    model: Customer,
+                    as: 'customer',
+                    attributes: ['id', 'name']
+                },
+                {
+                    model: Warehouse,
+                    as: 'warehouse',
+                    attributes: ['id', 'warehouse_name']
+                },
+                {
+                    model: Godown,
+                    as: 'godown',
+                    attributes: ['id', 'godown_name']
+                },
+                {
+                    model: Stack,
+                    as: 'stackDetails',
+                    attributes: ['id', 'stack_name']
+                },
+                {
+                    model: WorkCategory,
+                    as: 'workCategory',
+                    attributes: ['id', 'work_category_name']
+                },
+            ],
             limit: Number(limit),
             offset,
             order: [['updatedAt', 'DESC']]

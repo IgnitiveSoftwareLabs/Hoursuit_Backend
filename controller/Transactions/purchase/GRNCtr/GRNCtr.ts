@@ -11,12 +11,13 @@ import ItemMaster from "../../../../modals/masters/items/itemMaster";
 import { GLImpactService } from "../../../../utils/glImpactService";
 import { CustomRequest } from "../../../../typeRequest/customReq";
 import { normalizeGRNStatus } from "../../../../utils/p2pStatus";
-import { 
-    PurchaseOrder, 
-    PurchaseOrderLine 
+import {
+    PurchaseOrder,
+    PurchaseOrderLine
 } from "../../../../modals/Transactions/purchase/purchaseOrder";
 import Godown from "../../../../modals/masters/godown/godown";
 import Stack from "../../../../modals/masters/stack/stack";
+import ChartOfAccountMaster from "../../../../modals/masters/chartOfAccount/chartOfAccount";
 import sequelize from "../../../../dbconfig/dbconfig";
 
 const normalizeOptionalId = (value: unknown) => {
@@ -24,6 +25,18 @@ const normalizeOptionalId = (value: unknown) => {
         return null;
     }
     return Number(value);
+};
+
+const itemIncludeConfig = {
+    model: ItemMaster,
+    as: "item",
+    attributes: ["id", "item_code", "item_name", "item_desc", "track_inventory", "cost_price", "default_rate", "asset_account_id", "income_account_id", "cogs_account_id", "expense_account_id"],
+    include: [
+        { model: ChartOfAccountMaster, as: "asset_account", attributes: ["id", "account_number", "account_name"], include: [{ association: "accountType", attributes: ["id", "account_type_name"] }] },
+        { model: ChartOfAccountMaster, as: "income_account", attributes: ["id", "account_number", "account_name"], include: [{ association: "accountType", attributes: ["id", "account_type_name"] }] },
+        { model: ChartOfAccountMaster, as: "cogs_account", attributes: ["id", "account_number", "account_name"], include: [{ association: "accountType", attributes: ["id", "account_type_name"] }] },
+        { model: ChartOfAccountMaster, as: "expense_account", attributes: ["id", "account_number", "account_name"], include: [{ association: "accountType", attributes: ["id", "account_type_name"] }] },
+    ],
 };
 
 const GRNController = {
@@ -70,7 +83,7 @@ const GRNController = {
                 user_id,
             };
 
-            console.log("Header Payload:", headerPayload);
+            // console.log("Header Payload:", headerPayload);
 
             if (!headerPayload.grnNo) {
                 res.status(StatusCodes.BAD_REQUEST);
@@ -203,24 +216,13 @@ const GRNController = {
                 {
                     model: Warehouse,
                     as: "warehouse",
-                    attributes: ["id"],
+                    // attributes: ["id", "warehouse_name"],
                 },
                 {
                     model: GRNLine,
                     as: "lineItems",
                     required: false,
-                    include: [
-                        {
-                            model: ItemMaster,
-                            as: "item",
-                            attributes: ["id", "item_code", "item_name", "item_desc"],
-                        },
-                        // {
-                        //     model: PurchaseOrderLine,
-                        //     as: "purchaseOrderLine",
-                        //     attributes: ["id", "quantity", "rate"],
-                        // },
-                    ],
+                    include: [itemIncludeConfig],
                 },
             ],
             offset,
@@ -263,18 +265,14 @@ const GRNController = {
                 {
                     model: Warehouse,
                     as: "warehouse",
-                    attributes: ["id"],
+                    // attributes: ["id", "warehouse_name"],
                 },
                 {
                     model: GRNLine,
                     as: "lineItems",
                     required: false,
                     include: [
-                        {
-                            model: ItemMaster,
-                            as: "item",
-                            attributes: ["id", "item_code", "item_name", "item_desc"],
-                        },
+                        itemIncludeConfig,
                         {
                             model: PurchaseOrderLine,
                             as: "purchaseOrderLine",
@@ -497,7 +495,7 @@ const GRNController = {
         }
 
         // Managed transaction for status transition, stock, and GL updates
-        await sequelize.transaction(async (t) => {
+        await sequelize.transaction(async (t: any) => {
             await grn.update({
                 status: normalizedStatus as "DRAFT" | "RECEIVED" | "QC_PENDING" | "QC_COMPLETED" | "COMPLETED" | "CANCELLED"
             }, { transaction: t });
@@ -511,13 +509,18 @@ const GRNController = {
                     user_id,
                     t
                 );
+
+                const parseOptionalId = (val: unknown) => (val !== undefined && val !== null && val !== "" ? Number(val) : undefined);
+                const parsedVoucherTypeId = parseOptionalId(req.body.voucherTypeId ?? req.body.voucher_type_id);
+                const parsedGrniAccountId = parseOptionalId(req.body.grniAccountId ?? req.body.grni_account_id);
+
                 await GLImpactService.processGRNPosting(
                     "GRN",
                     grn.id,
                     CompanyId,
                     user_id,
-                    undefined,
-                    2, // Default GRNI Clearing Account ID
+                    parsedVoucherTypeId,
+                    parsedGrniAccountId,
                     t
                 );
             }

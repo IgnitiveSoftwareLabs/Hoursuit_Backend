@@ -1,14 +1,19 @@
 import { Model, DataTypes, Optional } from "sequelize";
 import Joi from "joi";
 
+import ChartOfAccountMaster from "../chartOfAccount/chartOfAccount";
+import SubsidiaryMaster from "../subsidiaries/subsdiaryMaster";
+import ItemTypeMaster from "../../platform/itemType/itemType";
 import sequelize from "../../../dbconfig/dbconfig";
+import HSNSACMaster from "../HSN-SAC/HSNSACMaster";
+import UOMMaster from "../UOM/UOMMaster";
 
 interface ItemMasterAttributes {
     id: number;
     item_code?: string;
     item_name: string;
     item_desc?: string | null;
-    item_type?: string | null;
+    item_type_id?: number | null;
     track_inventory: boolean;
     sku?: string | null;
     barcode?: string | null;
@@ -37,7 +42,7 @@ class ItemMaster
     public item_code!: string;
     public item_name!: string;
     public item_desc?: string | null;
-    public item_type?: string | null;
+    public item_type_id?: number | null;
     public track_inventory!: boolean;
     public sku?: string | null;
     public barcode?: string | null;
@@ -60,7 +65,7 @@ class ItemMaster
             item_code: Joi.string().allow("").optional(),
             item_name: Joi.string().required(),
             item_desc: Joi.string().allow("").optional().allow(null),
-            item_type: Joi.string().allow("").optional().allow(null),
+            item_type_id: Joi.number().integer().positive().optional().allow(null),
             track_inventory: Joi.boolean().optional(),
             sku: Joi.string().allow("").optional().allow(null),
             barcode: Joi.string().allow("").optional().allow(null),
@@ -101,10 +106,10 @@ ItemMaster.init(
             allowNull: true,
             defaultValue: null,
         },
-        item_type: {
-            type: DataTypes.STRING(50),
+        item_type_id: {
+            type: DataTypes.INTEGER.UNSIGNED,
             allowNull: true,
-            defaultValue: "",
+            defaultValue: null,
         },
         track_inventory: {
             type: DataTypes.BOOLEAN,
@@ -183,5 +188,45 @@ ItemMaster.init(
         timestamps: true,
     }
 );
+
+ItemMaster.belongsTo(UOMMaster, {
+    foreignKey: "uom_id",
+    as: "uom",
+});
+
+ItemMaster.belongsTo(HSNSACMaster, {
+    foreignKey: "hsn_sac_code_id",
+    as: "hsnSacCode",
+});
+
+ItemMaster.belongsTo(SubsidiaryMaster, {
+    foreignKey: "subsidiary_id",
+    as: "subsidiary",
+});
+
+ItemMaster.belongsTo(ItemTypeMaster, {
+    foreignKey: "item_type_id",
+    as: "item_type",
+});
+
+ItemMaster.belongsTo(ChartOfAccountMaster, {
+    foreignKey: "asset_account_id",
+    as: "asset_account",
+});
+
+ItemMaster.belongsTo(ChartOfAccountMaster, {
+    foreignKey: "income_account_id",
+    as: "income_account",
+});
+
+ItemMaster.belongsTo(ChartOfAccountMaster, {
+    foreignKey: "cogs_account_id",
+    as: "cogs_account",
+});
+
+ItemMaster.belongsTo(ChartOfAccountMaster, {
+    foreignKey: "expense_account_id",
+    as: "expense_account",
+});
 
 export default ItemMaster;

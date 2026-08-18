@@ -6,10 +6,14 @@ import PaymentMethod from "../../../masters/paymentMethod/paymentMethod";
 import sequelize from "../../../../dbconfig/dbconfig";
 import Company from "../../../company/company";
 import User from "../../../user/user";
+import { PurchaseInvoiceHeader } from "../purchaseInvoice";
+
+import ChartOfAccountMaster from "../../../masters/chartOfAccount/chartOfAccount";
 
 export interface PurchasePaymentHeaderAttributes {
     id: number;
     companyId: number;
+    purchaseInvoiceHeaderId: number;
     paymentNumber: string;
     paymentDate: Date;
     vendorId: number;
@@ -30,6 +34,7 @@ export interface PurchasePaymentHeaderCreationAttributes
     extends Optional<
         PurchasePaymentHeaderAttributes,
         | "id"
+        | "purchaseInvoiceHeaderId"
         | "paymentMethodId"
         | "bankAccountId"
         | "currency"
@@ -49,6 +54,7 @@ class PurchasePaymentHeader
     implements PurchasePaymentHeaderAttributes {
     public id!: number;
     public companyId!: number;
+    public purchaseInvoiceHeaderId!: number;
     public paymentNumber!: string;
     public paymentDate!: Date;
     public vendorId!: number;
@@ -67,6 +73,7 @@ class PurchasePaymentHeader
     public static validatePurchasePaymentHeader(header: PurchasePaymentHeaderCreationAttributes) {
         const schema = Joi.object({
             companyId: Joi.number().integer().positive().required(),
+            purchaseInvoiceHeaderId: Joi.number().integer().positive().required(),
             paymentNumber: Joi.string().min(1).max(100).required(),
             paymentDate: Joi.date().required(),
             vendorId: Joi.number().integer().positive().required(),
@@ -94,6 +101,10 @@ PurchasePaymentHeader.init(
         companyId: {
             type: DataTypes.INTEGER,
             allowNull: false,
+        },
+        purchaseInvoiceHeaderId: {
+            type: DataTypes.INTEGER,
+            allowNull: true,
         },
         paymentNumber: {
             type: DataTypes.STRING(50),
@@ -160,6 +171,16 @@ PurchasePaymentHeader.init(
 PurchasePaymentHeader.belongsTo(Company, { foreignKey: "companyId", as: "company", onDelete: "CASCADE" });
 Company.hasMany(PurchasePaymentHeader, { foreignKey: "companyId", as: "purchasePaymentHeaders", onDelete: "CASCADE" });
 
+PurchasePaymentHeader.belongsTo(PurchaseInvoiceHeader, {
+    foreignKey: "purchaseInvoiceHeaderId",
+    as: "purchaseInvoice",
+    onDelete: "SET NULL",
+});
+PurchaseInvoiceHeader.hasMany(PurchasePaymentHeader, {
+    foreignKey: "purchaseInvoiceHeaderId",
+    as: "purchasePaymentHeaders",
+});
+
 PurchasePaymentHeader.belongsTo(User, { foreignKey: "user_id", as: "user", onDelete: "CASCADE" });
 User.hasMany(PurchasePaymentHeader, { foreignKey: "user_id", as: "purchasePaymentHeaders", onDelete: "CASCADE" });
 
@@ -167,5 +188,6 @@ PurchasePaymentHeader.belongsTo(VendorDetails, { foreignKey: "vendorId", as: "ve
 VendorDetails.hasMany(PurchasePaymentHeader, { foreignKey: "vendorId", as: "purchasePaymentHeaders", onDelete: "CASCADE" });
 
 PurchasePaymentHeader.belongsTo(PaymentMethod, { foreignKey: "paymentMethodId", as: "paymentMethod", onDelete: "SET NULL" });
+PurchasePaymentHeader.belongsTo(ChartOfAccountMaster, { foreignKey: "bankAccountId", as: "bankAccount", onDelete: "SET NULL" });
 
 export default PurchasePaymentHeader;

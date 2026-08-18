@@ -1,11 +1,13 @@
 import { Model, DataTypes, Optional } from "sequelize";
 import Joi from "joi";
-
+// import { PurchaseInvoiceLine } from "../../../master/";
 import VendorDetails from "../../../masters/vendorDetails/vendorDetails";
 import PurchaseOrder from "../purchaseOrder/purchaseOrderHeader";
+import PurchaseInvoiceLine from "./purchaseInvoiceLine";
 import sequelize from "../../../../dbconfig/dbconfig";
 import Company from "../../../company/company";
 import User from "../../../user/user";
+import { GRN } from "../GRN";
 
 interface PurchaseInvoiceHeaderAttributes {
     id: number;
@@ -240,24 +242,79 @@ PurchaseInvoiceHeader.init(
     }
 );
 
-PurchaseInvoiceHeader.belongsTo(Company, { foreignKey: "CompanyId", as: "company", onDelete: "CASCADE" });
-Company.hasMany(PurchaseInvoiceHeader, { foreignKey: "CompanyId", as: "purchaseInvoiceHeaders", onDelete: "CASCADE" });
+PurchaseInvoiceHeader.belongsTo(Company, {
+    foreignKey: "companyId",
+    as: "company",
+    onDelete: "CASCADE",
+});
+
+Company.hasMany(PurchaseInvoiceHeader, {
+    foreignKey: "companyId",
+    as: "purchaseInvoiceHeaders",
+    onDelete: "CASCADE",
+});
+
+PurchaseInvoiceHeader.belongsTo(GRN, {
+    foreignKey: "grnHeaderId",
+    as: "grn",
+    onDelete: "SET NULL",
+});
+GRN.hasMany(PurchaseInvoiceHeader, {
+    foreignKey: "grnHeaderId",
+    as: "purchaseInvoices",
+});
+
+PurchaseInvoiceHeader.belongsTo(User, {
+    foreignKey: "user_id",
+    as: "user",
+    onDelete: "CASCADE",
+});
+
 User.hasMany(PurchaseInvoiceHeader, {
     foreignKey: "user_id",
     as: "purchaseInvoiceHeaders",
 });
-PurchaseInvoiceHeader.belongsTo(User, { foreignKey: "user_id", as: "user", onDelete: "CASCADE" });
-PurchaseInvoiceHeader.belongsTo(PurchaseOrder, { foreignKey: "poHeaderId", as: "purchaseOrder", onDelete: "CASCADE" });
-PurchaseOrder.hasMany(PurchaseInvoiceHeader, { foreignKey: "poHeaderId", as: "purchaseInvoiceHeaders", onDelete: "CASCADE" });
+
+PurchaseInvoiceHeader.belongsTo(PurchaseOrder, {
+    foreignKey: "poHeaderId",
+    as: "purchaseOrder",
+    onDelete: "CASCADE",
+});
+
+PurchaseOrder.hasMany(PurchaseInvoiceHeader, {
+    foreignKey: "poHeaderId",
+    as: "purchaseInvoiceHeaders",
+    onDelete: "CASCADE",
+});
+
+PurchaseInvoiceHeader.belongsTo(VendorDetails, {
+    foreignKey: "vendorId",
+    as: "vendor",
+    onDelete: "CASCADE",
+});
+
 VendorDetails.hasMany(PurchaseInvoiceHeader, {
     foreignKey: "vendorId",
     as: "purchaseInvoiceHeaders",
-    onDelete: "CASCADE"
+    onDelete: "CASCADE",
 });
-PurchaseInvoiceHeader.belongsTo(VendorDetails, {
-    foreignKey:"vendorId",
-    as: "vendor",
-    onDelete: "CASCADE"
+
+// Header -> Lines
+// PurchaseInvoiceHeader.hasMany(PurchaseInvoiceLine, {
+//     foreignKey: "invoiceHeaderId",
+//     as: "purchaseInvoiceLines",
+//     onDelete: "CASCADE",
+// });
+PurchaseInvoiceLine.belongsTo(PurchaseInvoiceHeader, {
+    foreignKey: "invoiceHeaderId",
+    as: "invoiceHeader",
+    onDelete: "CASCADE",
+});
+
+PurchaseInvoiceHeader.hasMany(PurchaseInvoiceLine, {
+    foreignKey: "invoiceHeaderId",
+    as: "purchaseInvoiceLines",
+    onDelete: "CASCADE",
 });
 
 export default PurchaseInvoiceHeader;

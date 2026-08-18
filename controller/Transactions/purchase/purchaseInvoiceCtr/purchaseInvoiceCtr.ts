@@ -3,23 +3,37 @@ import asyncHandler from "express-async-handler";
 import { StatusCodes } from "http-status-codes";
 import { Op } from "sequelize";
 
-import { findCompanyForUser } from "../../../../utils/findCompanyForUser";
-import { CustomRequest } from "../../../../typeRequest/customReq";
-import sequelize from "../../../../dbconfig/dbconfig";
 import { PurchaseInvoiceHeader, PurchaseInvoiceLine } from "../../../../modals/Transactions/purchase/purchaseInvoice";
 import PurchaseOrder from "../../../../modals/Transactions/purchase/purchaseOrder/purchaseOrderHeader";
-import { PurchaseOrderLine } from "../../../../modals/Transactions/purchase/purchaseOrder";
+// import { PurchaseOrderLine } from "../../../../modals/Transactions/purchase/purchaseOrder";
 import VendorDetails from "../../../../modals/masters/vendorDetails/vendorDetails";
-import ItemMaster from "../../../../modals/masters/items/itemMaster";
-import { GRN } from "../../../../modals/Transactions/purchase/GRN";
-import { GLImpactService } from "../../../../utils/glImpactService";
 import { normalizePurchaseInvoiceStatus } from "../../../../utils/p2pStatus";
+import { findCompanyForUser } from "../../../../utils/findCompanyForUser";
+import ItemMaster from "../../../../modals/masters/items/itemMaster";
+import { GLImpactService } from "../../../../utils/glImpactService";
+import { GRN } from "../../../../modals/Transactions/purchase/GRN";
+import { CustomRequest } from "../../../../typeRequest/customReq";
+import sequelize from "../../../../dbconfig/dbconfig";
+
+import ChartOfAccountMaster from "../../../../modals/masters/chartOfAccount/chartOfAccount";
 
 const normalizeOptionalId = (value: unknown) => {
     if (value === null || value === "") {
         return null;
     }
     return Number(value);
+};
+
+const itemIncludeConfig = {
+    model: ItemMaster,
+    as: "item",
+    attributes: ["id", "item_code", "item_name", "item_desc", "track_inventory", "cost_price", "default_rate", "asset_account_id", "income_account_id", "cogs_account_id", "expense_account_id"],
+    include: [
+        { model: ChartOfAccountMaster, as: "asset_account", attributes: ["id", "account_number", "account_name"], include: [{ association: "accountType", attributes: ["id", "account_type_name"] }] },
+        { model: ChartOfAccountMaster, as: "income_account", attributes: ["id", "account_number", "account_name"], include: [{ association: "accountType", attributes: ["id", "account_type_name"] }] },
+        { model: ChartOfAccountMaster, as: "cogs_account", attributes: ["id", "account_number", "account_name"], include: [{ association: "accountType", attributes: ["id", "account_type_name"] }] },
+        { model: ChartOfAccountMaster, as: "expense_account", attributes: ["id", "account_number", "account_name"], include: [{ association: "accountType", attributes: ["id", "account_type_name"] }] },
+    ],
 };
 
 const calculateLineTotals = (quantity: number, unitPrice: number, discountPercent: number, taxPercent: number) => {
@@ -34,22 +48,27 @@ const calculateLineTotals = (quantity: number, unitPrice: number, discountPercen
 const PurchaseInvoiceController = {
     createPurchaseInvoice: asyncHandler(async (req: CustomRequest, res: Response) => {
         const transaction = await sequelize.transaction();
+
         try {
             let header = req.body.header;
             let lineItems = req.body.lineItems;
 
+            // Parse JSON if sent as string
             if (typeof header === "string") {
                 header = JSON.parse(header);
             }
+
             if (typeof lineItems === "string") {
                 lineItems = JSON.parse(lineItems);
             }
 
+            // Validate request
             if (!header || !Array.isArray(lineItems) || lineItems.length === 0) {
                 res.status(StatusCodes.BAD_REQUEST);
                 throw new Error("Header and at least one line item are required");
             }
 
+            // Get company and user
             const company = await findCompanyForUser(req.user);
             const companyId = company?.id;
             const user_id = req.user?.id;
@@ -61,62 +80,92 @@ const PurchaseInvoiceController = {
 
             const invoiceDate = header.invoiceDate ? new Date(header.invoiceDate) : null;
             const dueDate = header.dueDate ? new Date(header.dueDate) : null;
-            const status = normalizePurchaseInvoiceStatus(header.status, "DRAFT");
 
-            const headerPayload: any = {
-                invoiceNumber: String(header.invoiceNumber || "").trim(),
-                invoiceType: String(header.invoiceType || "").trim(),
-                vendorInvoiceNumber: header.vendorInvoiceNumber || null,
-                poHeaderId: normalizeOptionalId(header.poHeaderId),
-                grnHeaderId: normalizeOptionalId(header.grnHeaderId),
-                invoiceDate,
-                dueDate,
-                currency: header.currency || "INR",
-                exchangeRate: header.exchangeRate !== undefined && header.exchangeRate !== "" ? Number(header.exchangeRate) : 1,
-                // freightAmount: header.freightAmount !== undefined && header.freightAmount !== "" ? Number(header.freightAmount) : 0,
-                // otherCharges: header.otherCharges !== undefined && header.otherCharges !== "" ? Number(header.otherCharges) : 0,
-                status,
-                remarks: header.remarks || null,
-                companyId,
-                user_id,
-            };
+            // New Purchase Invoice always starts as DRAFT
+            const status = "DRAFT";
 
-            if (!headerPayload.invoiceNumber) {
+            const invoiceNumber = String(header.invoiceNumber || "").trim();
+
+            const invoiceType = String(header.invoiceType || "").trim();
+
+            if (!invoiceNumber) {
                 res.status(StatusCodes.BAD_REQUEST);
                 throw new Error("invoiceNumber is required");
             }
-            if (!headerPayload.invoiceType) {
+
+            if (!invoiceType) {
                 res.status(StatusCodes.BAD_REQUEST);
                 throw new Error("invoiceType is required");
             }
-            if (!headerPayload.invoiceDate || Number.isNaN(headerPayload.invoiceDate.getTime())) {
+
+            if (!invoiceDate || Number.isNaN(invoiceDate.getTime())) {
                 res.status(StatusCodes.BAD_REQUEST);
                 throw new Error("Valid invoiceDate is required");
-            }
-            if (!headerPayload.status) {
-                res.status(StatusCodes.BAD_REQUEST);
-                throw new Error("status is required");
             }
 
             let subtotal = 0;
             let taxAmount = 0;
             let discountAmount = 0;
-            const createdHeader = await PurchaseInvoiceHeader.create(headerPayload, { transaction });
-            const createdLineItems: any[] = [];
+
+            const calculatedLines: any[] = [];
 
             for (let index = 0; index < lineItems.length; index++) {
                 const lineItem = lineItems[index];
                 const quantity = Number(lineItem.quantity);
                 const unitPrice = Number(lineItem.unitPrice);
-                const discountPercent = lineItem.discountPercent !== undefined && lineItem.discountPercent !== "" ? Number(lineItem.discountPercent) : 0;
-                const taxPercent = lineItem.taxPercent !== undefined && lineItem.taxPercent !== "" ? Number(lineItem.taxPercent) : 0;
-                const { discountAmount: lineDiscount, taxAmount: lineTax, lineTotal } = calculateLineTotals(quantity, unitPrice, discountPercent, taxPercent);
 
-                const linePayload: any = {
-                    invoiceHeaderId: createdHeader.id,
+                const discountPercent = lineItem.discountPercent !== undefined && lineItem.discountPercent !== ""
+                    ? Number(lineItem.discountPercent)
+                    : 0;
+
+                const taxPercent = lineItem.taxPercent !== undefined && lineItem.taxPercent !== ""
+                    ? Number(lineItem.taxPercent)
+                    : 0;
+
+                const itemId = Number(lineItem.itemId);
+
+                if (Number.isNaN(itemId) || itemId <= 0) {
+                    res.status(StatusCodes.BAD_REQUEST);
+                    throw new Error(`itemId is required in line item ${index + 1}`);
+                }
+
+                if (Number.isNaN(quantity) || quantity <= 0) {
+                    res.status(StatusCodes.BAD_REQUEST);
+                    throw new Error(`quantity must be greater than zero in line item ${index + 1}`);
+                }
+
+                if (Number.isNaN(unitPrice) || unitPrice < 0) {
+                    res.status(StatusCodes.BAD_REQUEST);
+                    throw new Error(`unitPrice cannot be negative in line item ${index + 1}`);
+                }
+
+                if (Number.isNaN(discountPercent) || discountPercent < 0 || discountPercent > 100) {
+                    res.status(StatusCodes.BAD_REQUEST);
+                    throw new Error(`discountPercent must be between 0 and 100 in line item ${index + 1}`);
+                }
+
+                if (Number.isNaN(taxPercent) || taxPercent < 0 || taxPercent > 100) {
+                    res.status(StatusCodes.BAD_REQUEST);
+                    throw new Error(`taxPercent must be between 0 and 100 in line item ${index + 1}`);
+                }
+
+                const { discountAmount: lineDiscount, taxAmount: lineTax, lineTotal } = calculateLineTotals(
+                    quantity,
+                    unitPrice,
+                    discountPercent,
+                    taxPercent
+                );
+
+                // Accumulate totals
+                subtotal += quantity * unitPrice;
+                discountAmount += lineDiscount;
+                taxAmount += lineTax;
+
+                // Store calculated line
+                calculatedLines.push({
                     poLineId: normalizeOptionalId(lineItem.poLineId),
                     grnLineId: normalizeOptionalId(lineItem.grnLineId),
-                    itemId: Number(lineItem.itemId),
+                    itemId,
                     description: lineItem.description || null,
                     batchNo: lineItem.batchNo || null,
                     quantity,
@@ -127,42 +176,108 @@ const PurchaseInvoiceController = {
                     taxAmount: lineTax,
                     lineTotal,
                     remarks: lineItem.remarks || null,
+                });
+            }
+
+            // Round calculated values
+            subtotal = Number(subtotal.toFixed(2));
+            discountAmount = Number(discountAmount.toFixed(2));
+            taxAmount = Number(taxAmount.toFixed(2));
+
+            const freightAmount = header.freightAmount !== undefined && header.freightAmount !== ""
+                ? Number(header.freightAmount)
+                : 0;
+            const otherCharges = header.otherCharges !== undefined && header.otherCharges !== ""
+                ? Number(header.otherCharges)
+                : 0;
+
+            if (Number.isNaN(freightAmount) || freightAmount < 0) {
+                res.status(StatusCodes.BAD_REQUEST);
+                throw new Error("freightAmount cannot be negative");
+            }
+
+            if (Number.isNaN(otherCharges) || otherCharges < 0) {
+                res.status(StatusCodes.BAD_REQUEST);
+                throw new Error("otherCharges cannot be negative");
+            }
+
+            const totalAmount = Number((subtotal - discountAmount + taxAmount + freightAmount + otherCharges).toFixed(2));
+            const paidAmount = header.paidAmount !== undefined && header.paidAmount !== ""
+                ? Number(header.paidAmount)
+                : 0;
+
+            if (Number.isNaN(paidAmount) || paidAmount < 0) {
+                res.status(StatusCodes.BAD_REQUEST);
+                throw new Error("paidAmount cannot be negative");
+            }
+
+            if (paidAmount > totalAmount) {
+                res.status(StatusCodes.BAD_REQUEST);
+                throw new Error("paidAmount cannot be greater than totalAmount");
+            }
+
+            const balanceAmount = Number((totalAmount - paidAmount).toFixed(2));
+
+            const headerPayload: any = {
+                invoiceNumber,
+                invoiceType,
+                vendorInvoiceNumber: header.vendorInvoiceNumber || null,
+                poHeaderId: normalizeOptionalId(header.poHeaderId),
+                grnHeaderId: normalizeOptionalId(header.grnHeaderId),
+                vendorId: normalizeOptionalId(header.vendorId),
+                invoiceDate,
+                dueDate,
+                currency: header.currency || "INR",
+                exchangeRate: header.exchangeRate !== undefined && header.exchangeRate !== ""
+                    ? Number(header.exchangeRate)
+                    : 1,
+                subtotal,
+                taxAmount,
+                discountAmount,
+                freightAmount,
+                otherCharges,
+                totalAmount,
+                paidAmount,
+                balanceAmount,
+                status: "DRAFT",
+                remarks: header.remarks || null,
+                companyId,
+                user_id,
+            };
+
+            const createdHeader =
+                await PurchaseInvoiceHeader.create(
+                    headerPayload,
+                    { transaction }
+                );
+
+            const createdLineItems: any[] = [];
+
+            for (let index = 0; index < calculatedLines.length; index++) {
+                const line = calculatedLines[index];
+                const linePayload: any = {
+                    invoiceHeaderId: createdHeader.id,
+                    poLineId: line.poLineId,
+                    grnLineId: line.grnLineId,
+                    itemId: line.itemId,
+                    description: line.description,
+                    batchNo: line.batchNo,
+                    quantity: line.quantity,
+                    unitPrice: line.unitPrice,
+                    discountPercent: line.discountPercent,
+                    discountAmount: line.discountAmount,
+                    taxPercent: line.taxPercent,
+                    taxAmount: line.taxAmount,
+                    lineTotal: line.lineTotal,
+                    remarks: line.remarks,
                     CompanyId: companyId,
                     user_id,
                 };
 
-                if (!linePayload.itemId) {
-                    res.status(StatusCodes.BAD_REQUEST);
-                    throw new Error(`itemId is required in line item ${index + 1}`);
-                }
-                if (!linePayload.quantity || linePayload.quantity <= 0) {
-                    res.status(StatusCodes.BAD_REQUEST);
-                    throw new Error(`quantity must be greater than zero in line item ${index + 1}`);
-                }
-                if (linePayload.unitPrice < 0) {
-                    res.status(StatusCodes.BAD_REQUEST);
-                    throw new Error(`unitPrice cannot be negative in line item ${index + 1}`);
-                }
-
                 const createdLine = await PurchaseInvoiceLine.create(linePayload, { transaction });
+
                 createdLineItems.push(createdLine);
-                subtotal += quantity * unitPrice;
-                discountAmount += lineDiscount;
-                taxAmount += lineTax;
             }
-
-            const totalAmount = Number((subtotal - discountAmount + taxAmount).toFixed(2));
-            const paidAmount = header.paidAmount !== undefined && header.paidAmount !== "" ? Number(header.paidAmount) : 0;
-            const balanceAmount = Number((totalAmount - paidAmount).toFixed(2));
-
-            await createdHeader.update({
-                subtotal: Number(subtotal.toFixed(2)),
-                taxAmount: Number(taxAmount.toFixed(2)),
-                discountAmount: Number(discountAmount.toFixed(2)),
-                totalAmount,
-                paidAmount,
-                balanceAmount,
-            }, { transaction });
 
             await transaction.commit();
 
@@ -214,10 +329,30 @@ const PurchaseInvoiceController = {
                     required: false,
                 },
                 {
+                    model: GRN,
+                    as: "grn",
+                    attributes: ["id", "grnNo", "purchaseOrderId"],
+                    required: false,
+                    include: [
+                        {
+                            model: PurchaseOrder,
+                            as: "purchaseOrder",
+                            attributes: ["id", "purchaseNo"],
+                            required: false,
+                        },
+                    ],
+                },
+                {
                     model: VendorDetails,
                     as: "vendor",
                     attributes: ["id", "vendor_name"],
                     required: false,
+                },
+                {
+                    model: PurchaseInvoiceLine,
+                    as: "purchaseInvoiceLines",
+                    required: false,
+                    include: [itemIncludeConfig],
                 },
             ],
             offset,
@@ -268,13 +403,7 @@ const PurchaseInvoiceController = {
                     model: PurchaseInvoiceLine,
                     as: "purchaseInvoiceLines",
                     required: false,
-                    include: [
-                        {
-                            model: ItemMaster,
-                            as: "item",
-                            attributes: ["id", "item_code", "item_name", "item_desc"],
-                        },
-                    ],
+                    include: [itemIncludeConfig],
                 },
             ],
         });
@@ -454,7 +583,17 @@ const PurchaseInvoiceController = {
 
     updatePurchaseInvoiceStatus: asyncHandler(async (req: CustomRequest, res: Response) => {
         const { id } = req.params;
-        const { status } = req.body;
+        const {
+            status,
+            voucherTypeId,
+            voucher_type_id,
+            grniAccountId,
+            grni_account_id,
+            apAccountId,
+            ap_account_id,
+            taxAccountId,
+            tax_account_id,
+        } = req.body;
 
         const company = await findCompanyForUser(req.user);
         const companyId = company?.id;
@@ -494,6 +633,13 @@ const PurchaseInvoiceController = {
             throw new Error("Purchase invoice is already POSTED");
         }
 
+        const parseOptionalId = (val: unknown) => (val !== undefined && val !== null && val !== "" ? Number(val) : undefined);
+
+        const parsedVoucherTypeId = parseOptionalId(voucherTypeId ?? voucher_type_id);
+        const parsedGrniAccountId = parseOptionalId(grniAccountId ?? grni_account_id);
+        const parsedApAccountId = parseOptionalId(apAccountId ?? ap_account_id);
+        const parsedTaxAccountId = parseOptionalId(taxAccountId ?? tax_account_id);
+
         // Managed transaction for status update & GL posting
         await sequelize.transaction(async (t) => {
             await invoice.update({
@@ -506,9 +652,10 @@ const PurchaseInvoiceController = {
                     invoice.id,
                     companyId,
                     user_id,
-                    undefined,
-                    2, // Default GRNI Clearing Account ID
-                    3, // Default Accounts Payable (Vendor) Account ID
+                    parsedVoucherTypeId,
+                    parsedGrniAccountId,
+                    parsedApAccountId,
+                    parsedTaxAccountId,
                     t
                 );
             }

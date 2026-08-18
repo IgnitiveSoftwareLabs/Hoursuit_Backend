@@ -109,14 +109,19 @@ async function syncdatabase() {
   // Purchase models
   await PurchaseOrder.sync();
   await PurchaseOrderLine.sync();
-  await PurchaseInvoiceHeader.sync();
+
   await GRN.sync();
   await GRNLine.sync();
+
+  await PurchaseInvoiceHeader.sync();
   await PurchaseInvoiceLine.sync();
+
   await PurchasePaymentHeader.sync();
   await PurchasePaymentLine.sync();
+
   await PurchaseReturnHeader.sync();
   await PurchaseReturnLine.sync();
+
   await QualityInspectionHeader.sync();
   await QualityInspectionLine.sync();
 

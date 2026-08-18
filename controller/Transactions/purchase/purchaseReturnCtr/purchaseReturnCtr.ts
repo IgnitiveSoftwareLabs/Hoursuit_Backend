@@ -10,17 +10,31 @@ import sequelize from "../../../../dbconfig/dbconfig";
 import { PurchaseReturnHeader, PurchaseReturnLine } from "../../../../modals/Transactions/purchase/purchaseReturn";
 import PurchaseInvoiceHeader from "../../../../modals/Transactions/purchase/purchaseInvoice/purchaseInvoiceHeader";
 import PurchaseOrder from "../../../../modals/Transactions/purchase/purchaseOrder/purchaseOrderHeader";
-import { GRN } from "../../../../modals/Transactions/purchase/GRN";
+import { GRN, GRNLine } from "../../../../modals/Transactions/purchase/GRN";
 import VendorDetails from "../../../../modals/masters/vendorDetails/vendorDetails";
 import ItemMaster from "../../../../modals/masters/items/itemMaster";
 import { InventoryService } from "../../../../utils/inventoryService";
 import { GLImpactService } from "../../../../utils/glImpactService";
+
+import ChartOfAccountMaster from "../../../../modals/masters/chartOfAccount/chartOfAccount";
 
 const normalizeOptionalId = (value: unknown) => {
     if (value === null || value === undefined || value === "") {
         return null;
     }
     return Number(value);
+};
+
+const itemIncludeConfig = {
+    model: ItemMaster,
+    as: "item",
+    attributes: ["id", "item_code", "item_name", "item_desc", "track_inventory", "cost_price", "default_rate", "asset_account_id", "income_account_id", "cogs_account_id", "expense_account_id"],
+    include: [
+        { model: ChartOfAccountMaster, as: "asset_account", attributes: ["id", "account_number", "account_name"], include: [{ association: "accountType", attributes: ["id", "account_type_name"] }] },
+        { model: ChartOfAccountMaster, as: "income_account", attributes: ["id", "account_number", "account_name"], include: [{ association: "accountType", attributes: ["id", "account_type_name"] }] },
+        { model: ChartOfAccountMaster, as: "cogs_account", attributes: ["id", "account_number", "account_name"], include: [{ association: "accountType", attributes: ["id", "account_type_name"] }] },
+        { model: ChartOfAccountMaster, as: "expense_account", attributes: ["id", "account_number", "account_name"], include: [{ association: "accountType", attributes: ["id", "account_type_name"] }] },
+    ],
 };
 
 const PurchaseReturnController = {
@@ -91,9 +105,17 @@ const PurchaseReturnController = {
                 const damagedQty = lineItem.damagedQty !== undefined ? Number(lineItem.damagedQty) : 0;
                 const unitPrice = Number(lineItem.unitPrice);
 
+                let resolvedGrnLineId = normalizeOptionalId(lineItem.grnLineId);
+                if (resolvedGrnLineId) {
+                    const existingGrnLine = await GRNLine.findByPk(resolvedGrnLineId, { transaction });
+                    if (!existingGrnLine) {
+                        resolvedGrnLineId = null;
+                    }
+                }
+
                 const linePayload: any = {
                     returnHeaderId: createdHeader.id,
-                    grnLineId: normalizeOptionalId(lineItem.grnLineId),
+                    grnLineId: resolvedGrnLineId,
                     itemId: Number(lineItem.itemId),
                     batchNo: lineItem.batchNo || null,
                     returnQty,
@@ -188,6 +210,12 @@ const PurchaseReturnController = {
                     attributes: ["id", "grnNo"],
                     required: false,
                 },
+                {
+                    model: PurchaseReturnLine,
+                    as: "purchaseReturnLines",
+                    required: false,
+                    include: [itemIncludeConfig],
+                },
             ],
             offset,
             limit: Number(limit),
@@ -249,13 +277,7 @@ const PurchaseReturnController = {
                     model: PurchaseReturnLine,
                     as: "purchaseReturnLines",
                     required: false,
-                    include: [
-                        {
-                            model: ItemMaster,
-                            as: "item",
-                            attributes: ["id", "item_code", "item_name", "item_desc"],
-                        },
-                    ],
+                    include: [itemIncludeConfig],
                 },
             ],
         });
@@ -351,9 +373,17 @@ const PurchaseReturnController = {
                 const damagedQty = lineItem.damagedQty !== undefined ? Number(lineItem.damagedQty) : 0;
                 const unitPrice = Number(lineItem.unitPrice);
 
+                let resolvedGrnLineId = normalizeOptionalId(lineItem.grnLineId);
+                if (resolvedGrnLineId) {
+                    const existingGrnLine = await GRNLine.findByPk(resolvedGrnLineId, { transaction });
+                    if (!existingGrnLine) {
+                        resolvedGrnLineId = null;
+                    }
+                }
+
                 const linePayload: any = {
                     returnHeaderId: existingReturn.id,
-                    grnLineId: normalizeOptionalId(lineItem.grnLineId),
+                    grnLineId: resolvedGrnLineId,
                     itemId: Number(lineItem.itemId),
                     batchNo: lineItem.batchNo || null,
                     returnQty,
@@ -451,7 +481,7 @@ const PurchaseReturnController = {
                     companyId,
                     user_id,
                     undefined,
-                    3, // Accounts Payable Vendor Account ID
+                    undefined,
                     t
                 );
             }
