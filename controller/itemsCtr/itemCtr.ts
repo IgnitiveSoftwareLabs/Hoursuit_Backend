@@ -6,6 +6,10 @@ import SubsidiaryMaster from "../../modals/masters/subsidiaries/subsdiaryMaster"
 import { findCompanyForUser } from "../../utils/findCompanyForUser";
 import ItemMaster from "../../modals/masters/items/itemMaster";
 import { CustomRequest } from "../../typeRequest/customReq";
+import UOMMaster from "../../modals/masters/UOM/UOMMaster";
+import HSNSACMaster from "../../modals/masters/HSN-SAC/HSNSACMaster";
+import ChartOfAccountMaster from "../../modals/masters/chartOfAccount/chartOfAccount";
+import ItemTypeMaster from "../../modals/platform/itemType/itemType";
 
 const ItemMasterController = {
     // Create new item
@@ -15,6 +19,7 @@ const ItemMasterController = {
             item_name,
             item_desc,
             item_type,
+            item_type_id,
             track_inventory,
             sku,
             barcode,
@@ -63,11 +68,17 @@ const ItemMasterController = {
             validatedSubsidiaryId = Number(subsidiary_id);
         }
 
+        const resolvedItemTypeId = item_type_id !== undefined && item_type_id !== null && String(item_type_id) !== ""
+            ? Number(item_type_id)
+            : (item_type !== undefined && item_type !== null && String(item_type) !== "" && !isNaN(Number(item_type))
+                ? Number(item_type)
+                : null);
+
         const item = await ItemMaster.create({
             item_code,
             item_name,
             item_desc,
-            item_type,
+            item_type_id: resolvedItemTypeId,
             track_inventory,
             sku,
             barcode,
@@ -105,7 +116,54 @@ const ItemMasterController = {
             throw new Error("Unauthorized: Company not found for user");
         }
 
-        const items = await ItemMaster.findAll();
+        const items = await ItemMaster.findAll({
+            include: [
+                {
+                    model: UOMMaster,
+                    as: "uom",
+                    attributes: ["id", "uom_name"],
+                },
+                {
+                    model: HSNSACMaster,
+                    as: "hsnSacCode",
+                    attributes: ["id", "code", "type"],
+                },
+                {
+                    model: SubsidiaryMaster,
+                    as: "subsidiary",
+                    attributes: ["id", "subsidiary_name"],
+                },
+                {
+                    model: ItemTypeMaster,
+                    as: "item_type",
+                    attributes: ["id", "item_type_name"],
+                },
+                {
+                    model: ChartOfAccountMaster,
+                    as: "asset_account",
+                    attributes: ["id", "account_number", "account_name"],
+                    include: [{ association: "accountType", attributes: ["id", "account_type_name"] }],
+                },
+                {
+                    model: ChartOfAccountMaster,
+                    as: "income_account",
+                    attributes: ["id", "account_number", "account_name"],
+                    include: [{ association: "accountType", attributes: ["id", "account_type_name"] }],
+                },
+                {
+                    model: ChartOfAccountMaster,
+                    as: "cogs_account",
+                    attributes: ["id", "account_number", "account_name"],
+                    include: [{ association: "accountType", attributes: ["id", "account_type_name"] }],
+                },
+                {
+                    model: ChartOfAccountMaster,
+                    as: "expense_account",
+                    attributes: ["id", "account_number", "account_name"],
+                    include: [{ association: "accountType", attributes: ["id", "account_type_name"] }],
+                },
+            ],
+        });
 
         res.status(StatusCodes.OK).json({
             message: "Items fetched successfully",
@@ -123,7 +181,54 @@ const ItemMasterController = {
             throw new Error("Valid item ID is required");
         }
 
-        const item = await ItemMaster.findByPk(Number(id));
+        const item = await ItemMaster.findByPk(Number(id), {
+            include: [
+                {
+                    model: UOMMaster,
+                    as: "uom",
+                    attributes: ["id", "uom_name"],
+                },
+                {
+                    model: HSNSACMaster,
+                    as: "hsnSacCode",
+                    attributes: ["id", "code", "type"],
+                },
+                {
+                    model: SubsidiaryMaster,
+                    as: "subsidiary",
+                    attributes: ["id", "subsidiary_name"],
+                },
+                {
+                    model: ItemTypeMaster,
+                    as: "item_type",
+                    attributes: ["id", "item_type_name"],
+                },
+                {
+                    model: ChartOfAccountMaster,
+                    as: "asset_account",
+                    attributes: ["id", "account_number", "account_name"],
+                    include: [{ association: "accountType", attributes: ["id", "account_type_name"] }],
+                },
+                {
+                    model: ChartOfAccountMaster,
+                    as: "income_account",
+                    attributes: ["id", "account_number", "account_name"],
+                    include: [{ association: "accountType", attributes: ["id", "account_type_name"] }],
+                },
+                {
+                    model: ChartOfAccountMaster,
+                    as: "cogs_account",
+                    attributes: ["id", "account_number", "account_name"],
+                    include: [{ association: "accountType", attributes: ["id", "account_type_name"] }],
+                },
+                {
+                    model: ChartOfAccountMaster,
+                    as: "expense_account",
+                    attributes: ["id", "account_number", "account_name"],
+                    include: [{ association: "accountType", attributes: ["id", "account_type_name"] }],
+                },
+            ],
+        });
 
         if (!item) {
             res.status(StatusCodes.NOT_FOUND);
@@ -145,6 +250,7 @@ const ItemMasterController = {
             item_name,
             item_desc,
             item_type,
+            item_type_id,
             hsn_sac_code_id,
             track_inventory,
             sku,
@@ -176,7 +282,14 @@ const ItemMasterController = {
         if (item_code !== undefined) item.item_code = item_code;
         if (item_name !== undefined) item.item_name = item_name;
         if (item_desc !== undefined) item.item_desc = item_desc || null;
-        if (item_type !== undefined) item.item_type = item_type ?? null;
+        const rawItemTypeId = item_type_id !== undefined ? item_type_id : item_type;
+        if (rawItemTypeId !== undefined) {
+            if (rawItemTypeId === null || String(rawItemTypeId) === "") {
+                item.item_type_id = null;
+            } else if (!isNaN(Number(rawItemTypeId))) {
+                item.item_type_id = Number(rawItemTypeId);
+            }
+        }
         if (track_inventory !== undefined) item.track_inventory = track_inventory;
         if (sku !== undefined) item.sku = sku || null;
         if (barcode !== undefined) item.barcode = barcode || null;

@@ -3,15 +3,19 @@ import asyncHandler from "express-async-handler";
 import { StatusCodes } from "http-status-codes";
 import { Op } from "sequelize";
 
-import { findCompanyForUser } from "../../../../utils/findCompanyForUser";
-import { normalizePurchasePaymentStatus } from "../../../../utils/p2pStatus";
-import { CustomRequest } from "../../../../typeRequest/customReq";
-import sequelize from "../../../../dbconfig/dbconfig";
 import { PurchasePaymentHeader, PurchasePaymentLine } from "../../../../modals/Transactions/purchase/purchasePayment";
 import PurchaseInvoiceHeader from "../../../../modals/Transactions/purchase/purchaseInvoice/purchaseInvoiceHeader";
+import { PurchaseInvoiceLine } from "../../../../modals/Transactions/purchase/purchaseInvoice";
 import VendorDetails from "../../../../modals/masters/vendorDetails/vendorDetails";
 import PaymentMethod from "../../../../modals/masters/paymentMethod/paymentMethod";
+import { normalizePurchasePaymentStatus } from "../../../../utils/p2pStatus";
+import { findCompanyForUser } from "../../../../utils/findCompanyForUser";
 import { GLImpactService } from "../../../../utils/glImpactService";
+// import { GRN } from "../../../../modals/Transactions/purchase/GRN";
+import { CustomRequest } from "../../../../typeRequest/customReq";
+import sequelize from "../../../../dbconfig/dbconfig";
+
+import ChartOfAccountMaster from "../../../../modals/masters/chartOfAccount/chartOfAccount";
 
 const normalizeOptionalId = (value: unknown) => {
     if (value === null || value === undefined || value === "") {
@@ -23,20 +27,18 @@ const normalizeOptionalId = (value: unknown) => {
 const PurchasePaymentController = {
     createPurchasePayment: asyncHandler(async (req: CustomRequest, res: Response) => {
         const transaction = await sequelize.transaction();
-        try {
-            let header = req.body.header;
-            let paymentLines = req.body.paymentLines || req.body.lineItems;
 
-            if (typeof header === "string") {
-                header = JSON.parse(header);
-            }
+        try {
+            const header = req.body;
+            let paymentLines = req.body.lines;
+
             if (typeof paymentLines === "string") {
                 paymentLines = JSON.parse(paymentLines);
             }
 
             if (!header || !Array.isArray(paymentLines) || paymentLines.length === 0) {
                 res.status(StatusCodes.BAD_REQUEST);
-                throw new Error("Header and at least one invoice payment allocation line are required");
+                throw new Error("Purchase payment details and at least one invoice payment allocation line are required");
             }
 
             const company = await findCompanyForUser(req.user);
@@ -48,7 +50,10 @@ const PurchasePaymentController = {
                 throw new Error("User authentication required");
             }
 
-            const paymentDate = header.paymentDate ? new Date(header.paymentDate) : null;
+            const paymentDate = header.paymentDate
+                ? new Date(header.paymentDate)
+                : null;
+
             const status = normalizePurchasePaymentStatus(header.status, "DRAFT");
 
             let calculatedTotal = 0;
@@ -56,21 +61,25 @@ const PurchasePaymentController = {
 
             for (let i = 0; i < paymentLines.length; i++) {
                 const line = paymentLines[i];
-                const purchaseInvoiceHeaderId = Number(line.purchaseInvoiceHeaderId);
+                const purchaseInvoiceLineId = Number(line.purchaseInvoiceLineId);
                 const amountPaid = Number(line.amountPaid);
 
-                if (!purchaseInvoiceHeaderId) {
+                if (!purchaseInvoiceLineId) {
                     res.status(StatusCodes.BAD_REQUEST);
-                    throw new Error(`purchaseInvoiceHeaderId is required in payment line ${i + 1}`);
+
+                    throw new Error(`purchaseInvoiceLineId is required in payment line ${i + 1}`);
                 }
+
                 if (!amountPaid || amountPaid <= 0) {
                     res.status(StatusCodes.BAD_REQUEST);
+
                     throw new Error(`amountPaid must be greater than zero in payment line ${i + 1}`);
                 }
 
                 calculatedTotal += amountPaid;
+
                 preparedLines.push({
-                    purchaseInvoiceHeaderId,
+                    purchaseInvoiceLineId,
                     amountPaid,
                     remarks: line.remarks || null,
                     CompanyId: companyId,
@@ -78,10 +87,18 @@ const PurchasePaymentController = {
                 });
             }
 
-            const totalAmount = header.totalAmount !== undefined && header.totalAmount !== ""
-                ? Number(header.totalAmount)
-                : Number(calculatedTotal.toFixed(2));
+            // ---------------------------------------------------------
+            // Total Amount
+            // ---------------------------------------------------------
+            const totalAmount =
+                header.totalAmount !== undefined &&
+                    header.totalAmount !== ""
+                    ? Number(header.totalAmount)
+                    : Number(calculatedTotal.toFixed(2));
 
+            // ---------------------------------------------------------
+            // Header Payload
+            // ---------------------------------------------------------
             const headerPayload: any = {
                 paymentNumber: String(header.paymentNumber || "").trim(),
                 paymentDate,
@@ -90,48 +107,135 @@ const PurchasePaymentController = {
                 bankAccountId: normalizeOptionalId(header.bankAccountId),
                 totalAmount,
                 currency: header.currency || "INR",
-                exchangeRate: header.exchangeRate !== undefined && header.exchangeRate !== "" ? Number(header.exchangeRate) : 1,
+                exchangeRate: header.exchangeRate !== undefined && header.exchangeRate !== ""
+                        ? Number(header.exchangeRate)
+                        : 1,
                 referenceNo: header.referenceNo || null,
                 status,
                 remarks: header.remarks || null,
                 companyId,
                 user_id,
+                purchaseInvoiceHeaderId: header.purchaseInvoiceHeaderId ? Number(header.purchaseInvoiceHeaderId) : null,
             };
 
+            // ---------------------------------------------------------
+            // Validate Payment Number
+            // ---------------------------------------------------------
             if (!headerPayload.paymentNumber) {
                 res.status(StatusCodes.BAD_REQUEST);
-                throw new Error("paymentNumber is required");
+
+                throw new Error(
+                    "paymentNumber is required"
+                );
             }
+
+            // ---------------------------------------------------------
+            // Validate Vendor
+            // ---------------------------------------------------------
             if (!headerPayload.vendorId) {
                 res.status(StatusCodes.BAD_REQUEST);
-                throw new Error("vendorId is required");
+
+                throw new Error(
+                    "vendorId is required"
+                );
             }
-            if (!headerPayload.paymentDate || Number.isNaN(headerPayload.paymentDate.getTime())) {
+
+            // ---------------------------------------------------------
+            // Validate Payment Date
+            // ---------------------------------------------------------
+            if (
+                !headerPayload.paymentDate ||
+                Number.isNaN(
+                    headerPayload.paymentDate.getTime()
+                )
+            ) {
                 res.status(StatusCodes.BAD_REQUEST);
-                throw new Error("Valid paymentDate is required");
+
+                throw new Error(
+                    "Valid paymentDate is required"
+                );
             }
 
-            const createdHeader = await PurchasePaymentHeader.create(headerPayload, { transaction });
+            // ---------------------------------------------------------
+            // Validate Total Amount
+            // ---------------------------------------------------------
+            if (
+                !headerPayload.totalAmount ||
+                headerPayload.totalAmount <= 0
+            ) {
+                res.status(StatusCodes.BAD_REQUEST);
 
+                throw new Error(
+                    "Total payment amount must be greater than zero"
+                );
+            }
+
+            // ---------------------------------------------------------
+            // Optional: Validate calculated total
+            // ---------------------------------------------------------
+            if (
+                Number(headerPayload.totalAmount.toFixed(2)) !==
+                Number(calculatedTotal.toFixed(2))
+            ) {
+                res.status(StatusCodes.BAD_REQUEST);
+
+                throw new Error(
+                    "Total payment amount does not match allocated invoice amounts"
+                );
+            }
+
+            // ---------------------------------------------------------
+            // Create Payment Header
+            // ---------------------------------------------------------
+            const createdHeader =
+                await PurchasePaymentHeader.create(
+                    headerPayload,
+                    { transaction }
+                );
+
+            // ---------------------------------------------------------
+            // Create Payment Lines
+            // ---------------------------------------------------------
             const createdLines: any[] = [];
+
             for (const linePayload of preparedLines) {
-                linePayload.paymentHeaderId = createdHeader.id;
-                const createdLine = await PurchasePaymentLine.create(linePayload, { transaction });
+
+                linePayload.paymentHeaderId =
+                    createdHeader.id;
+
+                const createdLine =
+                    await PurchasePaymentLine.create(
+                        linePayload,
+                        { transaction }
+                    );
+
                 createdLines.push(createdLine);
             }
 
+            // ---------------------------------------------------------
+            // Commit Transaction
+            // ---------------------------------------------------------
             await transaction.commit();
 
+            // ---------------------------------------------------------
+            // Response
+            // ---------------------------------------------------------
             res.status(StatusCodes.CREATED).json({
                 success: true,
-                message: "Purchase payment created successfully",
+
+                message:
+                    "Purchase payment created successfully",
+
                 result: {
                     header: createdHeader,
                     paymentLines: createdLines,
                 },
             });
+
         } catch (error) {
+
             await transaction.rollback();
+
             throw error;
         }
     }),
@@ -180,16 +284,16 @@ const PurchasePaymentController = {
                     required: false,
                 },
                 {
+                    model: ChartOfAccountMaster,
+                    as: "bankAccount",
+                    attributes: ["id", "account_number", "account_name"],
+                    include: [{ association: "accountType", attributes: ["id", "account_type_name"] }],
+                    required: false,
+                },
+                {
                     model: PurchasePaymentLine,
                     as: "paymentLines",
                     required: false,
-                    include: [
-                        {
-                            model: PurchaseInvoiceHeader,
-                            as: "purchaseInvoiceHeader",
-                            attributes: ["id", "invoiceNumber", "totalAmount", "paidAmount", "balanceAmount"],
-                        },
-                    ],
                 },
             ],
             offset,
@@ -237,16 +341,16 @@ const PurchasePaymentController = {
                     required: false,
                 },
                 {
+                    model: ChartOfAccountMaster,
+                    as: "bankAccount",
+                    attributes: ["id", "account_number", "account_name"],
+                    include: [{ association: "accountType", attributes: ["id", "account_type_name"] }],
+                    required: false,
+                },
+                {
                     model: PurchasePaymentLine,
                     as: "paymentLines",
                     required: false,
-                    include: [
-                        {
-                            model: PurchaseInvoiceHeader,
-                            as: "purchaseInvoiceHeader",
-                            attributes: ["id", "invoiceNumber", "totalAmount", "paidAmount", "balanceAmount", "status"],
-                        },
-                    ],
                 },
             ],
         });
@@ -384,100 +488,361 @@ const PurchasePaymentController = {
         }
     }),
 
-    updatePurchasePaymentStatus: asyncHandler(async (req: CustomRequest, res: Response) => {
-        const { id } = req.params;
-        const { status } = req.body;
+    updatePurchasePaymentStatus: asyncHandler(
+        async (req: CustomRequest, res: Response) => {
+            const { id } = req.params;
+            const { status } = req.body;
 
-        const company = await findCompanyForUser(req.user);
-        const companyId = company?.id;
-        const user_id = req.user?.id;
+            // ============================================================
+            // Validate Payment ID
+            // ============================================================
 
-        if (!companyId || !user_id) {
-            res.status(StatusCodes.UNAUTHORIZED);
-            throw new Error("User authentication required");
-        }
+            const paymentId = Number(id);
 
-        const payment = await PurchasePaymentHeader.findOne({
-            where: { id: Number(id), companyId },
-            include: [
-                {
-                    model: PurchasePaymentLine,
-                    as: "paymentLines",
-                },
-            ],
-        });
+            if (!paymentId || Number.isNaN(paymentId)) {
+                res.status(StatusCodes.BAD_REQUEST);
+                throw new Error("Valid purchase payment ID is required");
+            }
 
-        if (!payment) {
-            res.status(StatusCodes.NOT_FOUND);
-            throw new Error("Purchase payment not found");
-        }
-        if (!status) {
-            res.status(StatusCodes.BAD_REQUEST);
-            throw new Error("status is required");
-        }
+            // ============================================================
+            // Validate User / Company
+            // ============================================================
 
-        const previousStatus = payment.status;
-        const normalizedStatus = normalizePurchasePaymentStatus(status);
+            const company = await findCompanyForUser(req.user);
+            const companyId = company?.id;
+            const user_id = req.user?.id;
 
-        if (previousStatus === normalizedStatus) {
-            res.status(StatusCodes.OK).json({
-                success: true,
-                message: `Purchase payment status is already set to ${status}`,
-                result: payment,
-            });
-            return;
-        }
+            if (!companyId || !user_id) {
+                res.status(StatusCodes.UNAUTHORIZED);
+                throw new Error("User authentication required");
+            }
 
-        if (previousStatus === "POSTED") {
-            res.status(StatusCodes.BAD_REQUEST);
-            throw new Error("Purchase payment is already POSTED and cannot change status");
-        }
+            // ============================================================
+            // Validate Status
+            // ============================================================
 
-        await sequelize.transaction(async (t) => {
-            await payment.update({ status: normalizedStatus as "DRAFT" | "POSTED" | "CANCELLED" }, { transaction: t });
+            if (!status) {
+                res.status(StatusCodes.BAD_REQUEST);
+                throw new Error("status is required");
+            }
 
-            if (normalizedStatus === "POSTED") {
-                const paymentLines = (payment as any).paymentLines || [];
-                for (const line of paymentLines) {
-                    const invoice = await PurchaseInvoiceHeader.findOne({
-                        where: { id: line.purchaseInvoiceHeaderId, companyId },
-                        transaction: t,
-                    });
+            const normalizedStatus = normalizePurchasePaymentStatus(status);
 
-                    if (invoice) {
-                        const currentPaid = Number(invoice.paidAmount || 0);
-                        const totalInv = Number(invoice.totalAmount || 0);
-                        const newPaid = Number((currentPaid + Number(line.amountPaid || 0)).toFixed(2));
-                        const newBalance = Number((totalInv - newPaid).toFixed(2));
-                        const newInvoiceStatus = newBalance <= 0 ? "PAID" : "PARTIAL_PAID";
+            // ============================================================
+            // Find Purchase Payment
+            // ============================================================
 
-                        await invoice.update({
-                            paidAmount: newPaid,
-                            balanceAmount: newBalance < 0 ? 0 : newBalance,
-                            status: newInvoiceStatus,
-                        }, { transaction: t });
-                    }
-                }
-
-                // Post GL Impact (Debit Accounts Payable, Credit Bank/Cash)
-                await GLImpactService.processPurchasePaymentPosting(
-                    payment.id,
+            const payment = await PurchasePaymentHeader.findOne({
+                where: {
+                    id: paymentId,
                     companyId,
-                    user_id,
-                    undefined,
-                    3, // Accounts Payable Vendor Account ID
-                    payment.bankAccountId || undefined,
-                    t
+                },
+                include: [
+                    {
+                        model: PurchasePaymentLine,
+                        as: "paymentLines",
+                        required: false,
+                    },
+                ],
+            });
+
+            if (!payment) {
+                res.status(StatusCodes.NOT_FOUND);
+                throw new Error("Purchase payment not found");
+            }
+
+            // ============================================================
+            // Previous Status
+            // ============================================================
+
+            const previousStatus = payment.status;
+
+            if (previousStatus === normalizedStatus) {
+                res.status(StatusCodes.OK).json({
+                    success: true,
+                    message: `Purchase payment status is already set to ${normalizedStatus}`,
+                    result: payment,
+                });
+
+                return;
+            }
+
+            // ============================================================
+            // Prevent Changes After POSTED
+            // ============================================================
+
+            if (previousStatus === "POSTED") {
+                res.status(StatusCodes.BAD_REQUEST);
+                throw new Error(
+                    "Purchase payment is already POSTED and cannot change status"
                 );
             }
-        });
 
-        res.status(StatusCodes.OK).json({
-            success: true,
-            message: "Purchase payment status updated successfully",
-            result: payment,
-        });
-    }),
+            // ============================================================
+            // Get Payment Lines
+            // ============================================================
+
+            const paymentLines = (payment as any).paymentLines || [];
+
+            if (!Array.isArray(paymentLines) || paymentLines.length === 0) {
+                res.status(StatusCodes.BAD_REQUEST);
+                throw new Error(
+                    "Purchase payment must contain at least one payment line"
+                );
+            }
+
+            // ============================================================
+            // Transaction
+            // ============================================================
+
+            await sequelize.transaction(async (t) => {
+                // --------------------------------------------------------
+                // Update Payment Status
+                // --------------------------------------------------------
+
+                await payment.update(
+                    {
+                        status: normalizedStatus as
+                            | "DRAFT"
+                            | "POSTED"
+                            | "CANCELLED",
+                    },
+                    {
+                        transaction: t,
+                    }
+                );
+
+                // ========================================================
+                // POST PAYMENT
+                // ========================================================
+
+                if (normalizedStatus === "POSTED") {
+                    for (const line of paymentLines) {
+                        // ------------------------------------------------
+                        // Validate Invoice Line ID
+                        // ------------------------------------------------
+
+                        const purchaseInvoiceLineId = Number(
+                            line.purchaseInvoiceLineId
+                        );
+
+                        if (
+                            !purchaseInvoiceLineId ||
+                            Number.isNaN(purchaseInvoiceLineId)
+                        ) {
+                            throw new Error(
+                                `purchaseInvoiceLineId is required for payment line ${line.id}`
+                            );
+                        }
+
+                        // ------------------------------------------------
+                        // Validate Amount
+                        // ------------------------------------------------
+
+                        const amountPaid = Number(line.amountPaid);
+
+                        if (!amountPaid || amountPaid <= 0) {
+                            throw new Error(
+                                `amountPaid must be greater than zero for payment line ${line.id}`
+                            );
+                        }
+
+                        // =================================================
+                        // Find Purchase Invoice Line
+                        // =================================================
+
+                        const invoiceLine =
+                            await PurchaseInvoiceLine.findOne({
+                                where: {
+                                    id: purchaseInvoiceLineId,
+                                    CompanyId: companyId,
+                                },
+                                include: [
+                                    {
+                                        model: PurchaseInvoiceHeader,
+                                        as: "invoiceHeader",
+                                        required: true,
+                                    },
+                                ],
+                                transaction: t,
+                            });
+
+                        if (!invoiceLine) {
+                            throw new Error(
+                                `Purchase invoice line ${purchaseInvoiceLineId} not found`
+                            );
+                        }
+
+                        // =================================================
+                        // Get Invoice Header
+                        // =================================================
+
+                        const invoice = (invoiceLine as any).invoiceHeader;
+
+                        if (!invoice) {
+                            throw new Error(
+                                `Purchase invoice header not found for invoice line ${purchaseInvoiceLineId}`
+                            );
+                        }
+
+                        // =================================================
+                        // Validate Invoice Company
+                        // =================================================
+
+                        if (Number(invoice.companyId) !== Number(companyId)) {
+                            throw new Error(
+                                `Purchase invoice ${invoice.id} does not belong to the current company`
+                            );
+                        }
+
+                        // =================================================
+                        // Calculate Payment
+                        // =================================================
+
+                        const currentPaid = Number(invoice.paidAmount || 0);
+
+                        const totalInvoiceAmount = Number(
+                            invoice.totalAmount || 0
+                        );
+
+                        const newPaidAmount = Number(
+                            (currentPaid + amountPaid).toFixed(2)
+                        );
+
+                        const newBalanceAmount = Number(
+                            (totalInvoiceAmount - newPaidAmount).toFixed(2)
+                        );
+
+                        // =================================================
+                        // Prevent Overpayment
+                        // =================================================
+
+                        if (newPaidAmount > totalInvoiceAmount) {
+                            throw new Error(
+                                `Payment amount exceeds the remaining balance of purchase invoice ${invoice.invoiceNumber}`
+                            );
+                        }
+
+                        // =================================================
+                        // Determine Invoice Status
+                        // =================================================
+
+                        let newInvoiceStatus:
+                            | "PARTIAL_PAID"
+                            | "PAID";
+
+                        if (newBalanceAmount <= 0) {
+                            newInvoiceStatus = "PAID";
+                        } else {
+                            newInvoiceStatus = "PARTIAL_PAID";
+                        }
+
+                        // =================================================
+                        // Update Purchase Invoice
+                        // =================================================
+
+                        await invoice.update(
+                            {
+                                paidAmount: newPaidAmount,
+                                balanceAmount:
+                                    newBalanceAmount < 0
+                                        ? 0
+                                        : newBalanceAmount,
+                                status: newInvoiceStatus,
+                            },
+                            {
+                                transaction: t,
+                            }
+                        );
+                    }
+
+                    // ========================================================
+                    // GL IMPACT
+                    // ========================================================
+
+                    const parseOptionalId = (val: unknown) => (val !== undefined && val !== null && val !== "" ? Number(val) : undefined);
+                    const parsedVoucherTypeId = parseOptionalId(req.body.voucherTypeId ?? req.body.voucher_type_id);
+                    const parsedApAccountId = parseOptionalId(req.body.apAccountId ?? req.body.ap_account_id);
+                    const parsedBankAccountId = parseOptionalId(req.body.bankAccountId ?? req.body.bank_account_id);
+
+                    await GLImpactService.processPurchasePaymentPosting(
+                        payment.id,
+                        companyId,
+                        user_id,
+                        parsedVoucherTypeId,
+                        parsedApAccountId,
+                        parsedBankAccountId,
+                        t
+                    );
+                }
+
+                // ========================================================
+                // CANCEL PAYMENT
+                // ========================================================
+
+                if (normalizedStatus === "CANCELLED") {
+                    // Currently we only change the payment status.
+                    //
+                    // Since this payment was never POSTED before,
+                    // there is no invoice amount to reverse.
+                }
+            });
+
+            // ============================================================
+            // Fetch Updated Payment
+            // ============================================================
+
+            const updatedPayment = await PurchasePaymentHeader.findOne({
+                where: {
+                    id: paymentId,
+                    companyId,
+                },
+                include: [
+                    {
+                        model: VendorDetails,
+                        as: "vendor",
+                        attributes: ["id", "vendor_name"],
+                        required: false,
+                    },
+                    {
+                        model: PaymentMethod,
+                        as: "paymentMethod",
+                        attributes: ["id", "name"],
+                        required: false,
+                    },
+                    {
+                        model: PurchasePaymentLine,
+                        as: "paymentLines",
+                        required: false,
+                        include: [
+                            {
+                                model: PurchaseInvoiceLine,
+                                as: "purchaseInvoiceLine",
+                                required: false,
+                                // include: [
+                                //     {
+                                //         model: PurchaseInvoiceHeader,
+                                //         as: "invoiceHeader",
+                                //         required: false,
+                                //     },
+                                // ],
+                            },
+                        ],
+                    },
+                ],
+            });
+
+            // ============================================================
+            // Response
+            // ============================================================
+
+            res.status(StatusCodes.OK).json({
+                success: true,
+                message: "Purchase payment status updated successfully",
+                result: updatedPayment,
+            });
+        }
+    ),
 
     deletePurchasePayment: asyncHandler(async (req: CustomRequest, res: Response) => {
         const { id } = req.params;

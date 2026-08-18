@@ -64,7 +64,6 @@ const PurchaseOrderController = {
 
             const headerPayload: any = {
                 purchaseNo: String(header.purchaseNo || "").trim(),
-                // customer_id: Number(header.customer_id),
                 vendor_id: Number(header.vendor_id),
                 purchaseDate: header.purchaseDate ? new Date(header.purchaseDate) : null,
                 deliveryDate: header.deliveryDate ? new Date(header.deliveryDate) : null,

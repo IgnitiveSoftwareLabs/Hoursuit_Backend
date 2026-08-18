@@ -6,11 +6,12 @@ import PurchasePaymentHeader from "./purchasePaymentHeader";
 import sequelize from "../../../../dbconfig/dbconfig";
 import Company from "../../../company/company";
 import User from "../../../user/user";
+import { PurchaseInvoiceLine } from "../purchaseInvoice";
 
 export interface PurchasePaymentLineAttributes {
     id: number;
     paymentHeaderId: number;
-    purchaseInvoiceHeaderId: number;
+    purchaseInvoiceLineId: number;
     amountPaid: number;
     remarks?: string | null;
     CompanyId: number;
@@ -33,7 +34,7 @@ class PurchasePaymentLine
     implements PurchasePaymentLineAttributes {
     public id!: number;
     public paymentHeaderId!: number;
-    public purchaseInvoiceHeaderId!: number;
+    public purchaseInvoiceLineId!: number;
     public amountPaid!: number;
     public remarks!: string | null;
     public CompanyId!: number;
@@ -44,7 +45,7 @@ class PurchasePaymentLine
     public static validatePurchasePaymentLine(line: PurchasePaymentLineCreationAttributes) {
         const schema = Joi.object({
             paymentHeaderId: Joi.number().integer().positive().required(),
-            purchaseInvoiceHeaderId: Joi.number().integer().positive().required(),
+            purchaseInvoiceLineId: Joi.number().integer().positive().required(),
             amountPaid: Joi.number().positive().required(),
             remarks: Joi.string().max(500).optional().allow(null, ""),
             CompanyId: Joi.number().integer().positive().required(),
@@ -65,7 +66,7 @@ PurchasePaymentLine.init(
             type: DataTypes.INTEGER,
             allowNull: false,
         },
-        purchaseInvoiceHeaderId: {
+        purchaseInvoiceLineId: {
             type: DataTypes.INTEGER,
             allowNull: false,
         },
@@ -94,29 +95,70 @@ PurchasePaymentLine.init(
     }
 );
 
+// ============================================================
+// PurchasePaymentLine <-> PurchasePaymentHeader
+// ============================================================
+
 PurchasePaymentLine.belongsTo(PurchasePaymentHeader, {
     foreignKey: "paymentHeaderId",
     as: "paymentHeader",
     onDelete: "CASCADE",
 });
+
 PurchasePaymentHeader.hasMany(PurchasePaymentLine, {
     foreignKey: "paymentHeaderId",
     as: "paymentLines",
     onDelete: "CASCADE",
 });
 
-PurchasePaymentLine.belongsTo(PurchaseInvoiceHeader, {
-    foreignKey: "purchaseInvoiceHeaderId",
-    as: "purchaseInvoiceHeader",
+
+// ============================================================
+// PurchasePaymentLine <-> PurchaseInvoiceLine
+// ============================================================
+
+PurchasePaymentLine.belongsTo(PurchaseInvoiceLine, {
+    foreignKey: "purchaseInvoiceLineId",
+    as: "purchaseInvoiceLine",
     onDelete: "CASCADE",
 });
-PurchaseInvoiceHeader.hasMany(PurchasePaymentLine, {
-    foreignKey: "purchaseInvoiceHeaderId",
+
+PurchaseInvoiceLine.hasMany(PurchasePaymentLine, {
+    foreignKey: "purchaseInvoiceLineId",
     as: "paymentLines",
     onDelete: "CASCADE",
 });
 
-PurchasePaymentLine.belongsTo(Company, { foreignKey: "CompanyId", as: "company", onDelete: "CASCADE" });
-PurchasePaymentLine.belongsTo(User, { foreignKey: "user_id", as: "user", onDelete: "CASCADE" });
+
+// ============================================================
+// PurchasePaymentLine <-> Company
+// ============================================================
+
+PurchasePaymentLine.belongsTo(Company, {
+    foreignKey: "CompanyId",
+    as: "company",
+    onDelete: "CASCADE",
+});
+
+Company.hasMany(PurchasePaymentLine, {
+    foreignKey: "CompanyId",
+    as: "purchasePaymentLines",
+});
+
+
+// ============================================================
+// PurchasePaymentLine <-> User
+// ============================================================
+
+PurchasePaymentLine.belongsTo(User, {
+    foreignKey: "user_id",
+    as: "user",
+    onDelete: "CASCADE",
+});
+
+User.hasMany(PurchasePaymentLine, {
+    foreignKey: "user_id",
+    as: "purchasePaymentLines",
+});
+
 
 export default PurchasePaymentLine;
