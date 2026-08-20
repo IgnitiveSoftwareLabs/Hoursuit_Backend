@@ -6,16 +6,16 @@ import { Op } from "sequelize";
 import { PurchasePaymentHeader, PurchasePaymentLine } from "../../../../modals/Transactions/purchase/purchasePayment";
 import PurchaseInvoiceHeader from "../../../../modals/Transactions/purchase/purchaseInvoice/purchaseInvoiceHeader";
 import { PurchaseInvoiceLine } from "../../../../modals/Transactions/purchase/purchaseInvoice";
+import ChartOfAccountMaster from "../../../../modals/masters/chartOfAccount/chartOfAccount";
 import VendorDetails from "../../../../modals/masters/vendorDetails/vendorDetails";
 import PaymentMethod from "../../../../modals/masters/paymentMethod/paymentMethod";
 import { normalizePurchasePaymentStatus } from "../../../../utils/p2pStatus";
 import { findCompanyForUser } from "../../../../utils/findCompanyForUser";
-import { GLImpactService } from "../../../../utils/glImpactService";
 // import { GRN } from "../../../../modals/Transactions/purchase/GRN";
+import { GLImpactService } from "../../../../utils/glImpactService";
 import { CustomRequest } from "../../../../typeRequest/customReq";
 import sequelize from "../../../../dbconfig/dbconfig";
 
-import ChartOfAccountMaster from "../../../../modals/masters/chartOfAccount/chartOfAccount";
 
 const normalizeOptionalId = (value: unknown) => {
     if (value === null || value === undefined || value === "") {
@@ -87,18 +87,12 @@ const PurchasePaymentController = {
                 });
             }
 
-            // ---------------------------------------------------------
-            // Total Amount
-            // ---------------------------------------------------------
             const totalAmount =
                 header.totalAmount !== undefined &&
                     header.totalAmount !== ""
                     ? Number(header.totalAmount)
                     : Number(calculatedTotal.toFixed(2));
 
-            // ---------------------------------------------------------
-            // Header Payload
-            // ---------------------------------------------------------
             const headerPayload: any = {
                 paymentNumber: String(header.paymentNumber || "").trim(),
                 paymentDate,
@@ -108,134 +102,69 @@ const PurchasePaymentController = {
                 totalAmount,
                 currency: header.currency || "INR",
                 exchangeRate: header.exchangeRate !== undefined && header.exchangeRate !== ""
-                        ? Number(header.exchangeRate)
-                        : 1,
+                    ? Number(header.exchangeRate)
+                    : 1,
                 referenceNo: header.referenceNo || null,
                 status,
                 remarks: header.remarks || null,
                 companyId,
                 user_id,
-                purchaseInvoiceHeaderId: header.purchaseInvoiceHeaderId ? Number(header.purchaseInvoiceHeaderId) : null,
+                purchaseInvoiceHeaderId: header.purchaseInvoiceHeaderId ? Number(header.purchaseInvoiceHeaderId) : (paymentLines[0]?.purchaseInvoiceHeaderId ? Number(paymentLines[0].purchaseInvoiceHeaderId) : null),
             };
 
-            // ---------------------------------------------------------
-            // Validate Payment Number
-            // ---------------------------------------------------------
             if (!headerPayload.paymentNumber) {
                 res.status(StatusCodes.BAD_REQUEST);
-
-                throw new Error(
-                    "paymentNumber is required"
-                );
+                throw new Error("paymentNumber is required");
             }
 
-            // ---------------------------------------------------------
-            // Validate Vendor
-            // ---------------------------------------------------------
             if (!headerPayload.vendorId) {
                 res.status(StatusCodes.BAD_REQUEST);
-
-                throw new Error(
-                    "vendorId is required"
-                );
+                throw new Error("vendorId is required");
             }
 
-            // ---------------------------------------------------------
-            // Validate Payment Date
-            // ---------------------------------------------------------
-            if (
-                !headerPayload.paymentDate ||
-                Number.isNaN(
-                    headerPayload.paymentDate.getTime()
-                )
-            ) {
+            if (!headerPayload.paymentDate || Number.isNaN(headerPayload.paymentDate.getTime())) {
                 res.status(StatusCodes.BAD_REQUEST);
-
-                throw new Error(
-                    "Valid paymentDate is required"
-                );
+                throw new Error("Valid paymentDate is required");
             }
 
-            // ---------------------------------------------------------
-            // Validate Total Amount
-            // ---------------------------------------------------------
-            if (
-                !headerPayload.totalAmount ||
-                headerPayload.totalAmount <= 0
-            ) {
+            if (!headerPayload.totalAmount || headerPayload.totalAmount <= 0) {
                 res.status(StatusCodes.BAD_REQUEST);
-
-                throw new Error(
-                    "Total payment amount must be greater than zero"
-                );
+                throw new Error("Total payment amount must be greater than zero");
             }
 
-            // ---------------------------------------------------------
-            // Optional: Validate calculated total
-            // ---------------------------------------------------------
-            if (
-                Number(headerPayload.totalAmount.toFixed(2)) !==
-                Number(calculatedTotal.toFixed(2))
-            ) {
+            if (Number(headerPayload.totalAmount.toFixed(2)) !== Number(calculatedTotal.toFixed(2))) {
                 res.status(StatusCodes.BAD_REQUEST);
-
-                throw new Error(
-                    "Total payment amount does not match allocated invoice amounts"
-                );
+                throw new Error("Total payment amount does not match allocated invoice amounts");
             }
 
-            // ---------------------------------------------------------
-            // Create Payment Header
-            // ---------------------------------------------------------
             const createdHeader =
                 await PurchasePaymentHeader.create(
                     headerPayload,
                     { transaction }
                 );
 
-            // ---------------------------------------------------------
-            // Create Payment Lines
-            // ---------------------------------------------------------
             const createdLines: any[] = [];
 
             for (const linePayload of preparedLines) {
 
-                linePayload.paymentHeaderId =
-                    createdHeader.id;
+                linePayload.paymentHeaderId = createdHeader.id;
 
-                const createdLine =
-                    await PurchasePaymentLine.create(
-                        linePayload,
-                        { transaction }
-                    );
-
+                const createdLine = await PurchasePaymentLine.create(linePayload, { transaction });
                 createdLines.push(createdLine);
             }
 
-            // ---------------------------------------------------------
-            // Commit Transaction
-            // ---------------------------------------------------------
             await transaction.commit();
 
-            // ---------------------------------------------------------
-            // Response
-            // ---------------------------------------------------------
             res.status(StatusCodes.CREATED).json({
                 success: true,
-
-                message:
-                    "Purchase payment created successfully",
-
+                message: "Purchase payment created successfully",
                 result: {
                     header: createdHeader,
                     paymentLines: createdLines,
                 },
             });
-
         } catch (error) {
-
             await transaction.rollback();
-
             throw error;
         }
     }),
@@ -272,6 +201,11 @@ const PurchasePaymentController = {
         const payments = await PurchasePaymentHeader.findAll({
             where: whereClause,
             include: [
+                {
+                    model: PurchaseInvoiceHeader,
+                    as: "purchaseInvoice",
+                    required: false,
+                },
                 {
                     model: VendorDetails,
                     as: "vendor",
@@ -329,6 +263,11 @@ const PurchasePaymentController = {
         const payment = await PurchasePaymentHeader.findOne({
             where: { id: Number(id), companyId },
             include: [
+                {
+                    model: PurchaseInvoiceHeader,
+                    as: "purchaseInvoice",
+                    required: false,
+                },
                 {
                     model: VendorDetails,
                     as: "vendor",
@@ -407,9 +346,9 @@ const PurchasePaymentController = {
                 throw new Error("Purchase payment not found");
             }
 
-            if (existingPayment.status === "POSTED") {
+            if (String(existingPayment.status || "").toUpperCase() !== "DRAFT") {
                 res.status(StatusCodes.BAD_REQUEST);
-                throw new Error("Cannot edit a POSTED purchase payment");
+                throw new Error("Only draft purchase payments can be updated");
             }
 
             const paymentDate = header.paymentDate ? new Date(header.paymentDate) : existingPayment.paymentDate;
@@ -461,6 +400,7 @@ const PurchasePaymentController = {
                 remarks: header.hasOwnProperty("remarks") ? header.remarks : existingPayment.remarks,
                 companyId,
                 user_id,
+                purchaseInvoiceHeaderId: header.purchaseInvoiceHeaderId ? Number(header.purchaseInvoiceHeaderId) : (paymentLines[0]?.purchaseInvoiceHeaderId ? Number(paymentLines[0].purchaseInvoiceHeaderId) : existingPayment.purchaseInvoiceHeaderId),
             };
 
             await existingPayment.update(headerPayload, { transaction });
@@ -800,6 +740,11 @@ const PurchasePaymentController = {
                 },
                 include: [
                     {
+                        model: PurchaseInvoiceHeader,
+                        as: "purchaseInvoice",
+                        required: false,
+                    },
+                    {
                         model: VendorDetails,
                         as: "vendor",
                         attributes: ["id", "vendor_name"],
@@ -862,9 +807,9 @@ const PurchasePaymentController = {
             throw new Error("Purchase payment not found");
         }
 
-        if (payment.status === "POSTED") {
+        if (String(payment.status || "").toUpperCase() !== "DRAFT") {
             res.status(StatusCodes.BAD_REQUEST);
-            throw new Error("Cannot delete a POSTED purchase payment");
+            throw new Error("Only draft purchase payments can be deleted");
         }
 
         await PurchasePaymentLine.destroy({ where: { paymentHeaderId: payment.id } });

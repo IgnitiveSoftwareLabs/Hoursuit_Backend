@@ -188,70 +188,150 @@ class InventoryCount extends Model<InventoryCountAttributes, InventoryCountCreat
             ...(transaction ? { transaction } : {})
         });
 
-        if (existingInventory) {
-            // Update existing entry
-            const newQty = operation === 'ADD'
-                ? Number(existingInventory.qty) + Number(qty)
-                : Number(existingInventory.qty) - Number(qty);
+        if (operation === 'SUBTRACT') {
+            let targetInventory = existingInventory;
 
-            // Ensure quantity doesn't go negative
-            if (newQty < 0) {
-                throw new Error(`Insufficient inventory. Available: ${existingInventory.qty}, Requested: ${qty}`);
+            // If exact match doesn't exist or has insufficient quantity, find candidate inventory records
+            if (!targetInventory || Number(targetInventory.qty) < Number(qty)) {
+                let candidates: InventoryCount[] = [];
+
+                // Candidate search 1: Same item, company, and warehouse (if provided)
+                const searchWhere: any = { item_id, CompanyId, isActive: true };
+                if (warehouseId !== null && warehouseId !== undefined) {
+                    searchWhere.warehouseId = warehouseId;
+                }
+                candidates = await InventoryCount.findAll({
+                    where: searchWhere,
+                    order: [['qty', 'DESC']],
+                    ...(transaction ? { transaction } : {})
+                });
+
+                // Candidate search 2: Same item and company across any warehouse
+                if (candidates.length === 0) {
+                    candidates = await InventoryCount.findAll({
+                        where: { item_id, CompanyId, isActive: true },
+                        order: [['qty', 'DESC']],
+                        ...(transaction ? { transaction } : {})
+                    });
+                }
+
+                if (candidates.length === 0) {
+                    throw new Error('Cannot subtract from non-existent inventory');
+                }
+
+                // Calculate total available stock across candidate records
+                const totalAvailable = candidates.reduce((sum, inv) => sum + Math.max(0, Number(inv.qty)), 0);
+                if (totalAvailable < Number(qty)) {
+                    throw new Error(`Insufficient inventory. Available: ${totalAvailable}, Requested: ${qty}`);
+                }
+
+                // Deduct stock starting from candidate with highest qty
+                let remainingToDeduct = Number(qty);
+                let primaryUpdated: InventoryCount = candidates[0];
+
+                for (const inv of candidates) {
+                    if (remainingToDeduct <= 0) break;
+                    const currentQty = Math.max(0, Number(inv.qty));
+                    if (currentQty <= 0) continue;
+
+                    const deductQty = Math.min(currentQty, remainingToDeduct);
+                    const newQty = currentQty - deductQty;
+                    const invRate = Number(inv.rate) || 0;
+                    const newAmount = newQty * invRate;
+
+                    const today = new Date();
+                    const createdDate = new Date(inv.createdAt);
+                    const timeDifference = today.getTime() - createdDate.getTime();
+                    const daysDifference = Math.floor(timeDifference / (1000 * 3600 * 24));
+
+                    await inv.update({
+                        qty: newQty,
+                        amount: newAmount,
+                        inventory_age: daysDifference
+                    }, transaction ? { transaction } : {});
+
+                    remainingToDeduct -= deductQty;
+                    primaryUpdated = inv;
+                }
+
+                return primaryUpdated;
+            } else {
+                // Exact match exists and has sufficient quantity
+                const newQty = Number(targetInventory.qty) - Number(qty);
+                const updatedRate = rate !== undefined && rate !== null ? Number(rate) : Number(targetInventory.rate) || 0;
+                const newAmount = newQty * updatedRate;
+
+                const today = new Date();
+                const createdDate = new Date(targetInventory.createdAt);
+                const timeDifference = today.getTime() - createdDate.getTime();
+                const daysDifference = Math.floor(timeDifference / (1000 * 3600 * 24));
+
+                await targetInventory.update({
+                    qty: newQty,
+                    rate: rate !== undefined && rate !== null ? rate : targetInventory.rate,
+                    amount: newAmount,
+                    inventory_age: daysDifference,
+                    location: location || targetInventory.location,
+                    warehouseId: warehouseId !== undefined && warehouseId !== null ? warehouseId : targetInventory.warehouseId,
+                    godownId: godownId !== undefined && godownId !== null ? godownId : targetInventory.godownId,
+                    stack: stack !== undefined && stack !== null ? stack : targetInventory.stack,
+                    work_category_id: work_category_id !== undefined && work_category_id !== null ? work_category_id : targetInventory.work_category_id,
+                }, transaction ? { transaction } : {});
+
+                return targetInventory;
             }
-
-            // Calculate new amount based on new quantity and rate
-            const updatedRate = rate !== undefined && rate !== null ? Number(rate) : Number(existingInventory.rate) || 0;
-            const newAmount = newQty * updatedRate;
-
-            // Calculate inventory age (days between creation date and today)
-            const today = new Date();
-            const createdDate = new Date(existingInventory.createdAt);
-            const timeDifference = today.getTime() - createdDate.getTime();
-            const daysDifference = Math.floor(timeDifference / (1000 * 3600 * 24));
-
-            await existingInventory.update({
-                qty: newQty,
-                rate: rate !== undefined && rate !== null ? rate : existingInventory.rate,
-                amount: newAmount,
-                inventory_age: daysDifference,
-                location: location || existingInventory.location,
-                warehouseId: warehouseId !== undefined && warehouseId !== null ? warehouseId : existingInventory.warehouseId,
-                godownId: godownId !== undefined && godownId !== null ? godownId : existingInventory.godownId,
-                stack: stack !== undefined && stack !== null ? stack : existingInventory.stack,
-                work_category_id: work_category_id !== undefined && work_category_id !== null ? work_category_id : existingInventory.work_category_id,
-            }, transaction ? { transaction } : {});
-
-            return existingInventory;
         } else {
-            // Create new inventory entry
-            if (operation === 'SUBTRACT') {
-                throw new Error('Cannot subtract from non-existent inventory');
+            if (existingInventory) {
+                // Update existing entry for ADD
+                const newQty = Number(existingInventory.qty) + Number(qty);
+
+                const updatedRate = rate !== undefined && rate !== null ? Number(rate) : Number(existingInventory.rate) || 0;
+                const newAmount = newQty * updatedRate;
+
+                const today = new Date();
+                const createdDate = new Date(existingInventory.createdAt);
+                const timeDifference = today.getTime() - createdDate.getTime();
+                const daysDifference = Math.floor(timeDifference / (1000 * 3600 * 24));
+
+                await existingInventory.update({
+                    qty: newQty,
+                    rate: rate !== undefined && rate !== null ? rate : existingInventory.rate,
+                    amount: newAmount,
+                    inventory_age: daysDifference,
+                    location: location || existingInventory.location,
+                    warehouseId: warehouseId !== undefined && warehouseId !== null ? warehouseId : existingInventory.warehouseId,
+                    godownId: godownId !== undefined && godownId !== null ? godownId : existingInventory.godownId,
+                    stack: stack !== undefined && stack !== null ? stack : existingInventory.stack,
+                    work_category_id: work_category_id !== undefined && work_category_id !== null ? work_category_id : existingInventory.work_category_id,
+                }, transaction ? { transaction } : {});
+
+                return existingInventory;
+            } else {
+                // Create new inventory entry for ADD
+                const inventoryAge = 0;
+
+                const newInventory = await InventoryCount.create({
+                    work_order: work_order || undefined,
+                    item_id,
+                    qty,
+                    uom_id,
+                    rate: rate || 0,
+                    amount: amount || 0,
+                    inventory_age: inventoryAge,
+                    location: location || undefined,
+                    warehouseId: warehouseId as any,
+                    godownId: godownId as any,
+                    stack: stack as any,
+                    work_category_id: work_category_id !== undefined && work_category_id !== null ? work_category_id : undefined,
+                    customer_id: customer_id ?? null,
+                    lot_number: lot_number || undefined,
+                    CompanyId,
+                    user_id,
+                    isActive: true
+                }, transaction ? { transaction } : {});
+
+                return newInventory;
             }
-
-            // Calculate inventory age as 0 for new entries (will be updated later)
-            const inventoryAge = 0;
-
-            const newInventory = await InventoryCount.create({
-                work_order: work_order || undefined,
-                item_id,
-                qty,
-                uom_id,
-                rate: rate || 0,
-                amount: amount || 0,
-                inventory_age: inventoryAge,
-                location: location || undefined,
-                warehouseId: warehouseId as any,
-                godownId: godownId as any,
-                stack: stack as any,
-                work_category_id: work_category_id !== undefined && work_category_id !== null ? work_category_id : undefined,
-                customer_id: customer_id ?? null,
-                lot_number: lot_number || undefined,
-                CompanyId,
-                user_id,
-                isActive: true
-            }, transaction ? { transaction } : {});
-
-            return newInventory;
         }
     }
 

@@ -10,6 +10,9 @@ import { findCompanyForUser } from "../../../utils/findCompanyForUser";
 import { CustomRequest } from "../../../typeRequest/customReq";
 import sequelize from "../../../dbconfig/dbconfig"; // Ensure your Sequelize instance is imported
 import { PurchaseInvoiceHeader } from "../../../modals/Transactions/purchase/purchaseInvoice";
+import { PurchasePaymentHeader } from "../../../modals/Transactions/purchase/purchasePayment";
+import PurchaseReturnFulfillmentHeader from "../../../modals/Transactions/purchase/purchaseReturn/purchaseReturnFulfillmentHeader";
+import VendorCreditHeader from "../../../modals/Transactions/purchase/vendorCredit/vendorCreditHeader";
 
 // Helper function to safely compare floating-point currency numbers
 const isBalanced = (debit: number, credit: number): boolean => {
@@ -170,7 +173,10 @@ const JournalEntryController = {
     const sourceMap: Record<string, string[]> = {
       purchaseinvoice: ["PurchaseInvoice", "PURCHASE_INVOICE", "Purchase_Invoice", "Purchase Invoice"],
       purchasepayment: ["PurchasePayment", "PURCHASE_PAYMENT", "Purchase_Payment", "Purchase Payment"],
-      purchasereturn: ["PurchaseReturn", "PURCHASE_RETURN", "Purchase_Return", "Purchase Return"],
+      purchasereturn: ["PurchaseReturn", "PURCHASE_RETURN", "Purchase_Return", "Purchase Return", "PurchaseReturnFulfillment", "ReturnFulfillment", "VendorCredit", "VENDOR_CREDIT"],
+      purchasereturnfulfillment: ["PurchaseReturnFulfillment", "ReturnFulfillment", "PURCHASE_RETURN_FULFILLMENT"],
+      returnfulfillment: ["PurchaseReturnFulfillment", "ReturnFulfillment", "PURCHASE_RETURN_FULFILLMENT"],
+      vendorcredit: ["VendorCredit", "VENDOR_CREDIT", "Vendor_Credit", "Vendor Credit"],
       grn: ["GRN", "Grn", "grn"],
       debitnote: ["DebitNote", "Debit_Note", "Debit Note"],
     };
@@ -178,46 +184,115 @@ const JournalEntryController = {
     const normalizedKey = String(source || "").toLowerCase().replace(/[\s_]/g, "");
     const possibleSourceNames = sourceMap[normalizedKey] || [source];
 
+    let targetSourceIds: number[] = [Number(id)];
+
+    if (
+      normalizedKey === "purchasereturn" ||
+      normalizedKey === "purchasereturnfulfillment" ||
+      normalizedKey === "vendorcredit" ||
+      normalizedKey === "returnfulfillment"
+    ) {
+      // Find linked fulfillments and vendor credits for this return header or fulfillment/credit ID
+      const fulfillments = await PurchaseReturnFulfillmentHeader.findAll({
+        where: {
+          [Op.or]: [{ purchaseReturnHeaderId: Number(id) }, { id: Number(id) }],
+          companyId: company.id,
+        },
+        attributes: ["id"],
+      });
+      const fIds = fulfillments.map((f: any) => f.id);
+
+      const vendorCredits = await VendorCreditHeader.findAll({
+        where: {
+          [Op.or]: [{ purchaseReturnHeaderId: Number(id) }, { id: Number(id) }],
+          companyId: company.id,
+        },
+        attributes: ["id"],
+      });
+      const vcIds = vendorCredits.map((vc: any) => vc.id);
+
+      targetSourceIds = Array.from(new Set([Number(id), ...fIds, ...vcIds]));
+    }
+
     const whereClause: any = {
       CompanyId: company.id,
       [Op.or]: [
         {
-          source_id: Number(id),
+          source_id: { [Op.in]: targetSourceIds },
           source_name: { [Op.in]: possibleSourceNames },
         },
       ],
     };
 
     if (normalizedKey === "purchaseinvoice") {
+      const invoice = await PurchaseInvoiceHeader.findOne({
+        where: { id: Number(id), companyId: company.id },
+      });
+      if (invoice && String(invoice.status || "").toUpperCase() === "DRAFT") {
+        res.status(StatusCodes.OK).json({
+          message: "No GL impact recorded for Purchase Invoice in DRAFT status",
+          success: true,
+          result: null,
+        });
+        return;
+      }
       whereClause[Op.or].push({
-        source_id: Number(id),
+        source_id: { [Op.in]: targetSourceIds },
         entry_no: { [Op.like]: "JE-INV-%" },
       });
       whereClause[Op.or].push({
-        source_id: Number(id),
+        source_id: { [Op.in]: targetSourceIds },
         narration: { [Op.like]: "%Purchase Invoice%" },
       });
     } else if (normalizedKey === "purchasepayment") {
+      const payment = await PurchasePaymentHeader.findOne({
+        where: { id: Number(id), companyId: company.id },
+      });
+      if (payment && String(payment.status || "").toUpperCase() === "DRAFT") {
+        res.status(StatusCodes.OK).json({
+          message: "No GL impact recorded for Purchase Payment in DRAFT status",
+          success: true,
+          result: null,
+        });
+        return;
+      }
       whereClause[Op.or].push({
-        source_id: Number(id),
+        source_id: { [Op.in]: targetSourceIds },
         entry_no: { [Op.like]: "JE-PAY-%" },
       });
       whereClause[Op.or].push({
-        source_id: Number(id),
+        source_id: { [Op.in]: targetSourceIds },
         narration: { [Op.like]: "%Purchase Payment%" },
       });
-    } else if (normalizedKey === "purchasereturn") {
+    } else if (
+      normalizedKey === "purchasereturn" ||
+      normalizedKey === "purchasereturnfulfillment" ||
+      normalizedKey === "vendorcredit" ||
+      normalizedKey === "returnfulfillment"
+    ) {
       whereClause[Op.or].push({
-        source_id: Number(id),
+        source_id: { [Op.in]: targetSourceIds },
+        entry_no: { [Op.like]: "JE-PRF-%" },
+      });
+      whereClause[Op.or].push({
+        source_id: { [Op.in]: targetSourceIds },
+        entry_no: { [Op.like]: "JE-VC-%" },
+      });
+      whereClause[Op.or].push({
+        source_id: { [Op.in]: targetSourceIds },
         entry_no: { [Op.like]: "JE-RET-%" },
       });
       whereClause[Op.or].push({
-        source_id: Number(id),
+        source_id: { [Op.in]: targetSourceIds },
         narration: { [Op.like]: "%Purchase Return%" },
+      });
+      whereClause[Op.or].push({
+        source_id: { [Op.in]: targetSourceIds },
+        narration: { [Op.like]: "%Vendor Credit%" },
       });
     }
 
-    const entry = await JournalEntryHeader.findOne({
+    const entries = await JournalEntryHeader.findAll({
       where: whereClause,
       include: [
         {
@@ -234,10 +309,10 @@ const JournalEntryController = {
           ],
         },
       ],
-      order: [["id", "DESC"]],
+      order: [["id", "ASC"]],
     });
 
-    if (!entry) {
+    if (!entries || entries.length === 0) {
       res.status(StatusCodes.OK).json({
         message: "No GL postings recorded for this document yet.",
         success: true,
@@ -246,10 +321,38 @@ const JournalEntryController = {
       return;
     }
 
+    if (entries.length === 1) {
+      res.status(StatusCodes.OK).json({
+        message: "Journal entry fetched successfully",
+        success: true,
+        result: entries[0],
+      });
+      return;
+    }
+
+    const combinedLines = entries.flatMap((e: any) => e.lines || []);
+    const totalDebit = Number(combinedLines.reduce((s: number, l: any) => s + Number(l.debit_amount || 0), 0).toFixed(2));
+    const totalCredit = Number(combinedLines.reduce((s: number, l: any) => s + Number(l.credit_amount || 0), 0).toFixed(2));
+
+    const combinedEntry = {
+      id: entries[0].id,
+      entry_no: entries.map((e: any) => e.entry_no).join(" / "),
+      entry_date: entries[0].entry_date,
+      source_name: entries[0].source_name,
+      source_id: entries[0].source_id,
+      reference_no: entries.map((e: any) => e.reference_no).filter(Boolean).join(", "),
+      narration: entries.map((e: any) => e.narration).filter(Boolean).join(" | "),
+      status: "POSTED",
+      total_debit: totalDebit,
+      total_credit: totalCredit,
+      lines: combinedLines,
+      voucherType: (entries[0] as any).voucherType,
+    };
+
     res.status(StatusCodes.OK).json({
       message: "Journal entry fetched successfully",
       success: true,
-      result: entry,
+      result: combinedEntry,
     });
   }),
 

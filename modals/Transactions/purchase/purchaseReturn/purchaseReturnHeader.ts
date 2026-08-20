@@ -18,7 +18,7 @@ export interface PurchaseReturnHeaderAttributes {
     purchaseInvoiceHeaderId?: number | null;
     grnHeaderId?: number | null;
     returnDate: Date;
-    status: "DRAFT" | "APPROVED" | "RETURNED" | "CANCELLED";
+    status: "DRAFT" | "AUTHORIZED" | "APPROVED" | "PARTIALLY_FULFILLED" | "FULFILLED" | "RETURNED" | "CANCELLED";
     reason?: string | null;
     remarks?: string | null;
     user_id: number;
@@ -59,7 +59,7 @@ class PurchaseReturnHeader
     public vendorId!: number;
     public grnHeaderId!: number | null;
     public returnDate!: Date;
-    public status!: "DRAFT" | "APPROVED" | "RETURNED" | "CANCELLED";
+    public status!: "DRAFT" | "AUTHORIZED" | "APPROVED" | "PARTIALLY_FULFILLED" | "FULFILLED" | "RETURNED" | "CANCELLED";
     public reason!: string | null;
     public remarks!: string | null;
     public user_id!: number;
@@ -124,7 +124,10 @@ PurchaseReturnHeader.init(
         status: {
             type: DataTypes.ENUM(
                 "DRAFT",
+                "AUTHORIZED",
                 "APPROVED",
+                "PARTIALLY_FULFILLED",
+                "FULFILLED",
                 "RETURNED",
                 "CANCELLED"
             ),

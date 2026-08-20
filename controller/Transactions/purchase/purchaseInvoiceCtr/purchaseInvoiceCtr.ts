@@ -84,19 +84,23 @@ const PurchaseInvoiceController = {
             // New Purchase Invoice always starts as DRAFT
             const status = "DRAFT";
 
-            const invoiceNumber = String(header.invoiceNumber || "").trim();
-
-            const invoiceType = String(header.invoiceType || "").trim();
-
+            let invoiceNumber = String(header.invoiceNumber || "").trim();
             if (!invoiceNumber) {
-                res.status(StatusCodes.BAD_REQUEST);
-                throw new Error("invoiceNumber is required");
+                const count = await PurchaseInvoiceHeader.count({ where: { companyId }, transaction });
+                let autoNo = `INV-${String(count + 1).padStart(4, "0")}`;
+                const exists = await PurchaseInvoiceHeader.findOne({ where: { invoiceNumber: autoNo, companyId }, transaction });
+                if (exists) {
+                    autoNo = `INV-${Date.now()}`;
+                }
+                invoiceNumber = autoNo;
             }
 
-            if (!invoiceType) {
-                res.status(StatusCodes.BAD_REQUEST);
-                throw new Error("invoiceType is required");
+            let vendorInvoiceNumber = String(header.vendorInvoiceNumber || "").trim();
+            if (!vendorInvoiceNumber) {
+                vendorInvoiceNumber = `VINV-${invoiceNumber}`;
             }
+
+            const invoiceType = String(header.invoiceType || "Standard Bill").trim();
 
             if (!invoiceDate || Number.isNaN(invoiceDate.getTime())) {
                 res.status(StatusCodes.BAD_REQUEST);
@@ -221,7 +225,7 @@ const PurchaseInvoiceController = {
             const headerPayload: any = {
                 invoiceNumber,
                 invoiceType,
-                vendorInvoiceNumber: header.vendorInvoiceNumber || null,
+                vendorInvoiceNumber: vendorInvoiceNumber,
                 poHeaderId: normalizeOptionalId(header.poHeaderId),
                 grnHeaderId: normalizeOptionalId(header.grnHeaderId),
                 vendorId: normalizeOptionalId(header.vendorId),
@@ -473,6 +477,11 @@ const PurchaseInvoiceController = {
                 throw new Error("Purchase invoice not found");
             }
 
+            if (String(existingInvoice.status || "").toUpperCase() !== "DRAFT") {
+                res.status(StatusCodes.BAD_REQUEST);
+                throw new Error("Cannot update Purchase Invoice. Only DRAFT Purchase Invoices can be updated.");
+            }
+
             const invoiceDate = header.invoiceDate ? new Date(header.invoiceDate) : existingInvoice.invoiceDate;
             const dueDate = header.dueDate !== undefined ? (header.dueDate ? new Date(header.dueDate) : null) : existingInvoice.dueDate;
             const status = normalizePurchaseInvoiceStatus(header.status || existingInvoice.status, existingInvoice.status || "DRAFT");
@@ -698,6 +707,11 @@ const PurchaseInvoiceController = {
         if (!invoice) {
             res.status(StatusCodes.NOT_FOUND);
             throw new Error("Purchase invoice not found");
+        }
+
+        if (String(invoice.status || "").toUpperCase() !== "DRAFT") {
+            res.status(StatusCodes.BAD_REQUEST);
+            throw new Error("Cannot delete Purchase Invoice. Only DRAFT Purchase Invoices can be deleted.");
         }
 
         await PurchaseInvoiceLine.destroy({ where: { invoiceHeaderId: invoice.id } });

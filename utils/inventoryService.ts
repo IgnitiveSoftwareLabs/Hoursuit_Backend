@@ -4,6 +4,8 @@ import GRNLine from "../modals/Transactions/purchase/GRN/GRNLine";
 import PurchaseOrderLine from "../modals/Transactions/purchase/purchaseOrder/purchaseOrderLine";
 import PurchaseOrderHeader from "../modals/Transactions/purchase/purchaseOrder/purchaseOrderHeader";
 import { PurchaseReturnHeader, PurchaseReturnLine } from "../modals/Transactions/purchase/purchaseReturn";
+import PurchaseReturnFulfillmentHeader from "../modals/Transactions/purchase/purchaseReturn/purchaseReturnFulfillmentHeader";
+import PurchaseReturnFulfillmentLine from "../modals/Transactions/purchase/purchaseReturn/purchaseReturnFulfillmentLine";
 import ItemMaster from "../modals/masters/items/itemMaster";
 import InventoryCount from "../modals/inventory/inventory";
 import { normalizePurchaseOrderStatus } from "./p2pStatus";
@@ -172,40 +174,48 @@ export const InventoryService = {
   /**
    * Reduces warehouse inventory balances on Purchase Return execution
    */
+  /**
+   * Non-reducing operation for Purchase Return Authorization (Authorization does NOT reduce stock)
+   */
   reduceStockFromPurchaseReturn: async (
     returnId: number,
     companyId: number,
     userId: number,
     transaction?: Transaction
   ) => {
-    const purchaseReturn = await PurchaseReturnHeader.findOne({
-      where: { id: returnId, companyId },
+    // Return Authorization creates NO inventory movement
+    return;
+  },
+
+  /**
+   * Reduces warehouse inventory balances on Purchase Return Fulfillment execution (Physical Return)
+   */
+  reduceStockFromPurchaseReturnFulfillment: async (
+    fulfillmentId: number,
+    companyId: number,
+    userId: number,
+    transaction?: Transaction
+  ) => {
+    const fulfillment = await PurchaseReturnFulfillmentHeader.findOne({
+      where: { id: fulfillmentId, companyId },
       include: [
         {
-          model: PurchaseReturnLine,
-          as: "purchaseReturnLines",
+          model: PurchaseReturnFulfillmentLine,
+          as: "fulfillmentLines",
           include: [{ model: ItemMaster, as: "item" }]
         }
       ],
       transaction
     });
 
-    if (!purchaseReturn) {
-      throw new Error(`Purchase return record #${returnId} not found.`);
+    if (!fulfillment) {
+      throw new Error(`Purchase return fulfillment record #${fulfillmentId} not found.`);
     }
 
-    let warehouseId: number | null = null;
-    if (purchaseReturn.grnHeaderId) {
-      const grn = await GRN.findByPk(purchaseReturn.grnHeaderId, { transaction });
-      if (grn) {
-        warehouseId = (grn as any).warehouseId || null;
-      }
-    }
-
-    const lines = ((purchaseReturn as any).purchaseReturnLines || []) as any[];
+    const lines = ((fulfillment as any).fulfillmentLines || []) as any[];
 
     for (const line of lines) {
-      const qty = Number(line.returnQty || 0);
+      const qty = Number(line.fulfilledQty || 0);
       if (qty <= 0) continue;
 
       const rate = Number(line.unitPrice || 0);
@@ -219,11 +229,11 @@ export const InventoryService = {
           uom_id: uomId,
           rate,
           amount: qty * rate,
-          warehouseId: warehouseId || 1,
+          warehouseId: line.warehouseId || undefined,
           godownId: null,
           stack: null,
           customer_id: null,
-          lot_number: line.batchNo || "GENERAL",
+          lot_number: line.batchNo || undefined,
           CompanyId: companyId,
           user_id: userId,
           operation: "SUBTRACT"

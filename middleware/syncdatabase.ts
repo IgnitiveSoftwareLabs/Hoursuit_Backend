@@ -7,6 +7,10 @@ import { QualityInspectionHeader, QualityInspectionLine } from "../modals/Transa
 import { PurchaseInvoiceHeader, PurchaseInvoiceLine } from "../modals/Transactions/purchase/purchaseInvoice";
 import { PurchasePaymentHeader, PurchasePaymentLine } from "../modals/Transactions/purchase/purchasePayment";
 import { PurchaseReturnHeader, PurchaseReturnLine } from "../modals/Transactions/purchase/purchaseReturn";
+import PurchaseReturnFulfillmentHeader from "../modals/Transactions/purchase/purchaseReturn/purchaseReturnFulfillmentHeader";
+import PurchaseReturnFulfillmentLine from "../modals/Transactions/purchase/purchaseReturn/purchaseReturnFulfillmentLine";
+import VendorCreditHeader from "../modals/Transactions/purchase/vendorCredit/vendorCreditHeader";
+import VendorCreditLine from "../modals/Transactions/purchase/vendorCredit/vendorCreditLine";
 import { DeliveryChallanHeader, DeliveryChallanLine } from "../modals/Transactions/sales/deliveryChallan";
 import { PurchaseOrder, PurchaseOrderLine } from "../modals/Transactions/purchase/purchaseOrder";
 import { SalesReturnHeader, SalesReturnLine } from "../modals/Transactions/sales/salesReturn";
@@ -121,6 +125,12 @@ async function syncdatabase() {
 
   await PurchaseReturnHeader.sync();
   await PurchaseReturnLine.sync();
+
+  await PurchaseReturnFulfillmentHeader.sync();
+  await PurchaseReturnFulfillmentLine.sync();
+
+  await VendorCreditHeader.sync();
+  await VendorCreditLine.sync();
 
   await QualityInspectionHeader.sync();
   await QualityInspectionLine.sync();

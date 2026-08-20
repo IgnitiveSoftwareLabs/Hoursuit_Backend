@@ -68,8 +68,19 @@ const GRNController = {
                 throw new Error("User authentication required");
             }
 
+            let grnNo = String(header.grnNo || "").trim();
+            if (!grnNo) {
+                const count = await GRN.count({ where: { CompanyId }, transaction });
+                let autoNo = `GRN-${String(count + 1).padStart(4, "0")}`;
+                const exists = await GRN.findOne({ where: { grnNo: autoNo, CompanyId }, transaction });
+                if (exists) {
+                    autoNo = `GRN-${Date.now()}`;
+                }
+                grnNo = autoNo;
+            }
+
             const headerPayload: any = {
-                grnNo: String(header.grnNo || "").trim(),
+                grnNo,
                 purchaseOrderId: normalizeOptionalId(header.purchaseOrderId),
                 warehouseId: Number(header.warehouseId),
                 godownId: normalizeOptionalId(header.godownId) ? Number(header.godownId) : null,
@@ -83,12 +94,6 @@ const GRNController = {
                 user_id,
             };
 
-            // console.log("Header Payload:", headerPayload);
-
-            if (!headerPayload.grnNo) {
-                res.status(StatusCodes.BAD_REQUEST);
-                throw new Error("grnNo is required");
-            }
             if (!headerPayload.warehouseId) {
                 res.status(StatusCodes.BAD_REQUEST);
                 throw new Error("warehouseId is required");
@@ -123,7 +128,7 @@ const GRNController = {
                     serialNo: lineItem.serialNo || null,
                     manufacturingDate: lineItem.manufacturingDate ? new Date(lineItem.manufacturingDate) : null,
                     expiryDate: lineItem.expiryDate ? new Date(lineItem.expiryDate) : null,
-                    qcRequired: lineItem.qcRequired !== undefined ? Boolean(lineItem.qcRequired) : true,
+                    qcRequired: Boolean(lineItem.qcRequired),
                     status: lineItem.status || "PENDING",
                     remarks: lineItem.remarks || null,
                     CompanyId,
@@ -339,6 +344,11 @@ const GRNController = {
             if (!existingGRN) {
                 res.status(StatusCodes.NOT_FOUND);
                 throw new Error("GRN not found");
+            }
+
+            if (String(existingGRN.status || "").toUpperCase() !== "DRAFT") {
+                res.status(StatusCodes.BAD_REQUEST);
+                throw new Error("Cannot update GRN. Only DRAFT GRNs can be updated.");
             }
 
             const headerPayload: any = {
@@ -570,6 +580,11 @@ const GRNController = {
         if (!grn) {
             res.status(StatusCodes.NOT_FOUND);
             throw new Error("GRN not found");
+        }
+
+        if (String(grn.status || "").toUpperCase() !== "DRAFT") {
+            res.status(StatusCodes.BAD_REQUEST);
+            throw new Error("Cannot delete GRN. Only DRAFT GRNs can be deleted.");
         }
 
         await GRNLine.destroy({ where: { grnHeaderId: grn.id } });

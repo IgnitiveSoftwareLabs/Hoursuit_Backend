@@ -76,8 +76,14 @@ const PurchaseOrderController = {
                 throw new Error("User authentication required");
             }
 
+            let autoPurchaseNo = String(header.purchaseNo || "").trim();
+            if (!autoPurchaseNo) {
+                const poCount = await PurchaseOrder.count({ where: { CompanyId }, transaction });
+                autoPurchaseNo = `PO-${String(poCount + 1).padStart(4, "0")}`;
+            }
+
             const headerPayload: any = {
-                purchaseNo: String(header.purchaseNo || "").trim(),
+                purchaseNo: autoPurchaseNo,
                 vendor_id: Number(header.vendor_id),
                 purchaseDate: header.purchaseDate ? new Date(header.purchaseDate) : null,
                 deliveryDate: header.deliveryDate ? new Date(header.deliveryDate) : null,
@@ -100,11 +106,6 @@ const PurchaseOrderController = {
                 CompanyId,
                 user_id,
             };
-
-            if (!headerPayload.purchaseNo) {
-                res.status(StatusCodes.BAD_REQUEST);
-                throw new Error("purchaseNo is required");
-            }
             // if (!headerPayload.customer_id) {
             //     res.status(StatusCodes.BAD_REQUEST);
             //     throw new Error("customer_id is required");
@@ -119,23 +120,23 @@ const PurchaseOrderController = {
             }
             if (!headerPayload.city_id) {
                 res.status(StatusCodes.BAD_REQUEST);
-                throw new Error("city_id is required");
+                throw new Error("city is required");
             }
             if (!headerPayload.work_order_no) {
                 res.status(StatusCodes.BAD_REQUEST);
-                throw new Error("work_order_no is required");
+                throw new Error("work order number is required");
             }
             if (!headerPayload.transportation_mode_id) {
                 res.status(StatusCodes.BAD_REQUEST);
-                throw new Error("transportation_mode_id is required");
+                throw new Error("transportation mode is required");
             }
             if (!headerPayload.warehouse_id) {
                 res.status(StatusCodes.BAD_REQUEST);
-                throw new Error("warehouse_id is required");
+                throw new Error("warehouse is required");
             }
             if (!headerPayload.subsidiary_id) {
                 res.status(StatusCodes.BAD_REQUEST);
-                throw new Error("subsidiary_id is required");
+                throw new Error("subsidiary is required");
             }
 
             // Validate and prepare all line items before creating header
@@ -187,11 +188,11 @@ const PurchaseOrderController = {
                 // Validate line item
                 if (!linePayload.item_id) {
                     res.status(StatusCodes.BAD_REQUEST);
-                    throw new Error(`item_id is required in line item ${index + 1}`);
+                    throw new Error(`item is required in line item ${index + 1}`);
                 }
                 if (!linePayload.work_order_no) {
                     res.status(StatusCodes.BAD_REQUEST);
-                    throw new Error(`work_order_no is required in line item ${index + 1}`);
+                    throw new Error(`work order no. is required in line item ${index + 1}`);
                 }
                 if (!linePayload.quantity || linePayload.quantity <= 0) {
                     res.status(StatusCodes.BAD_REQUEST);
@@ -199,7 +200,7 @@ const PurchaseOrderController = {
                 }
                 if (!linePayload.uom_id) {
                     res.status(StatusCodes.BAD_REQUEST);
-                    throw new Error(`uom_id is required in line item ${index + 1}`);
+                    throw new Error(`uom is required in line item ${index + 1}`);
                 }
                 if (linePayload.rate !== null && linePayload.rate !== undefined && linePayload.rate < 0) {
                     res.status(StatusCodes.BAD_REQUEST);
@@ -282,7 +283,19 @@ const PurchaseOrderController = {
                 {
                     model: Warehouse,
                     as: "warehouse",
-                    attributes: ["id"],
+                    attributes: ["id", "name"],
+                },
+                {
+                    model: Godown,
+                    as: "godown",
+                    attributes: ["id", "name"],
+                    required: false,
+                },
+                {
+                    model: Stack,
+                    as: "stack",
+                    attributes: ["id", "name"],
+                    required: false,
                 },
                 {
                     model: SubsidiaryMaster,
@@ -346,11 +359,6 @@ const PurchaseOrderController = {
         const purchaseOrder = await PurchaseOrder.findOne({
             where: { id: Number(id), CompanyId },
             include: [
-                // {
-                //     model: Customer,
-                //     as: "customer",
-                //     attributes: ["id", "name", "contact", "email"],
-                // },
                 {
                     model: Vendor,
                     as: "vendor",
@@ -463,6 +471,11 @@ const PurchaseOrderController = {
                 throw new Error("Purchase order not found");
             }
 
+            if (String(existingPurchaseOrder.status || "").toUpperCase() !== "DRAFT") {
+                res.status(StatusCodes.BAD_REQUEST);
+                throw new Error("Cannot update Purchase Order. Only DRAFT Purchase Orders can be updated.");
+            }
+
             const headerPayload: any = {
                 purchaseNo: String(header.purchaseNo || "").trim(),
                 // customer_id: Number(header.customer_id),
@@ -507,23 +520,23 @@ const PurchaseOrderController = {
             }
             if (!headerPayload.city_id) {
                 res.status(StatusCodes.BAD_REQUEST);
-                throw new Error("city_id is required");
+                throw new Error("city is required");
             }
             if (!headerPayload.work_order_no) {
                 res.status(StatusCodes.BAD_REQUEST);
-                throw new Error("work_order_no is required");
+                throw new Error("Work order no is required");
             }
             if (!headerPayload.transportation_mode_id) {
                 res.status(StatusCodes.BAD_REQUEST);
-                throw new Error("transportation_mode_id is required");
+                throw new Error("transportation mode is required");
             }
             if (!headerPayload.warehouse_id) {
                 res.status(StatusCodes.BAD_REQUEST);
-                throw new Error("warehouse_id is required");
+                throw new Error("warehouse is required");
             }
             if (!headerPayload.subsidiary_id) {
                 res.status(StatusCodes.BAD_REQUEST);
-                throw new Error("subsidiary_id is required");
+                throw new Error("subsidiary is required");
             }
 
             await existingPurchaseOrder.update(headerPayload, { transaction });
@@ -582,11 +595,11 @@ const PurchaseOrderController = {
                 // Validations
                 if (!linePayload.item_id) {
                     res.status(StatusCodes.BAD_REQUEST);
-                    throw new Error("item_id is required in each line item");
+                    throw new Error("item is required in each line item");
                 }
                 if (!linePayload.work_order_no) {
                     res.status(StatusCodes.BAD_REQUEST);
-                    throw new Error("work_order_no is required in each line item");
+                    throw new Error("work order no is required in each line item");
                 }
                 if (!linePayload.quantity || linePayload.quantity <= 0) {
                     res.status(StatusCodes.BAD_REQUEST);
@@ -594,7 +607,7 @@ const PurchaseOrderController = {
                 }
                 if (!linePayload.uom_id) {
                     res.status(StatusCodes.BAD_REQUEST);
-                    throw new Error("uom_id is required in each line item");
+                    throw new Error("uom is required in each line item");
                 }
                 if (linePayload.rate !== null && linePayload.rate !== undefined && linePayload.rate < 0) {
                     res.status(StatusCodes.BAD_REQUEST);
@@ -679,6 +692,11 @@ const PurchaseOrderController = {
         if (!purchaseOrder) {
             res.status(StatusCodes.NOT_FOUND);
             throw new Error("Purchase order not found");
+        }
+
+        if (String(purchaseOrder.status || "").toUpperCase() !== "DRAFT") {
+            res.status(StatusCodes.BAD_REQUEST);
+            throw new Error("Cannot delete Purchase Order. Only DRAFT Purchase Orders can be deleted.");
         }
 
         // Delete line items first

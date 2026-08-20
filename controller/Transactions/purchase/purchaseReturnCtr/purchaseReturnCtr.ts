@@ -83,9 +83,18 @@ const PurchaseReturnController = {
             };
 
             if (!headerPayload.returnNumber) {
-                res.status(StatusCodes.BAD_REQUEST);
-                throw new Error("returnNumber is required");
+                const count = await PurchaseReturnHeader.count({ where: { companyId }, transaction });
+                let autoNo = `PR-${String(count + 1).padStart(4, "0")}`;
+                const exists = await PurchaseReturnHeader.findOne({
+                    where: { returnNumber: autoNo, companyId },
+                    transaction
+                });
+                if (exists) {
+                    autoNo = `PR-${Date.now()}`;
+                }
+                headerPayload.returnNumber = autoNo;
             }
+
             if (!headerPayload.vendorId) {
                 res.status(StatusCodes.BAD_REQUEST);
                 throw new Error("vendorId is required");
@@ -108,7 +117,28 @@ const PurchaseReturnController = {
                 let resolvedGrnLineId = normalizeOptionalId(lineItem.grnLineId);
                 if (resolvedGrnLineId) {
                     const existingGrnLine = await GRNLine.findByPk(resolvedGrnLineId, { transaction });
-                    if (!existingGrnLine) {
+                    if (existingGrnLine) {
+                        const receivedQty = Number((existingGrnLine as any).acceptedQty > 0 ? (existingGrnLine as any).acceptedQty : (existingGrnLine as any).receivedQty || 0);
+                        if (receivedQty > 0) {
+                            const previousLines = await PurchaseReturnLine.findAll({
+                                where: { grnLineId: resolvedGrnLineId },
+                                include: [{
+                                    model: PurchaseReturnHeader,
+                                    as: "purchaseReturnHeader",
+                                    where: { status: { [Op.ne]: "CANCELLED" } }
+                                }],
+                                transaction
+                            });
+
+                            const previouslyReturnedQty = previousLines.reduce((sum, l) => sum + Number(l.returnQty || 0), 0);
+                            const availableReturnQty = receivedQty - previouslyReturnedQty;
+
+                            if (returnQty > availableReturnQty) {
+                                res.status(StatusCodes.BAD_REQUEST);
+                                throw new Error(`Cannot return ${returnQty} units for item. Max returnable quantity for GRN line is ${availableReturnQty} (Received: ${receivedQty}, Previously Returned: ${previouslyReturnedQty}).`);
+                            }
+                        }
+                    } else {
                         resolvedGrnLineId = null;
                     }
                 }
@@ -202,7 +232,6 @@ const PurchaseReturnController = {
                 {
                     model: VendorDetails,
                     as: "vendor",
-                    attributes: ["id", "vendor_name"],
                     required: false,
                 },
                 {
@@ -265,7 +294,6 @@ const PurchaseReturnController = {
                 {
                     model: VendorDetails,
                     as: "vendor",
-                    attributes: ["id", "vendor_name"],
                     required: false,
                 },
                 {
@@ -351,9 +379,9 @@ const PurchaseReturnController = {
             };
 
             if (!headerPayload.returnNumber) {
-                res.status(StatusCodes.BAD_REQUEST);
-                throw new Error("returnNumber is required");
+                headerPayload.returnNumber = existingReturn.returnNumber;
             }
+
             if (!headerPayload.vendorId) {
                 res.status(StatusCodes.BAD_REQUEST);
                 throw new Error("vendorId is required");
@@ -377,7 +405,30 @@ const PurchaseReturnController = {
                 let resolvedGrnLineId = normalizeOptionalId(lineItem.grnLineId);
                 if (resolvedGrnLineId) {
                     const existingGrnLine = await GRNLine.findByPk(resolvedGrnLineId, { transaction });
-                    if (!existingGrnLine) {
+                    if (existingGrnLine) {
+                        const receivedQty = Number((existingGrnLine as any).acceptedQty > 0 ? (existingGrnLine as any).acceptedQty : (existingGrnLine as any).receivedQty || 0);
+                        if (receivedQty > 0) {
+                            const previousLines = await PurchaseReturnLine.findAll({
+                                where: { grnLineId: resolvedGrnLineId },
+                                include: [{
+                                    model: PurchaseReturnHeader,
+                                    as: "purchaseReturnHeader",
+                                    where: { status: { [Op.ne]: "CANCELLED" } }
+                                }],
+                                transaction
+                            });
+
+                            const previouslyReturnedQty = previousLines
+                                .filter(l => l.returnHeaderId !== existingReturn.id)
+                                .reduce((sum, l) => sum + Number(l.returnQty || 0), 0);
+                            const availableReturnQty = receivedQty - previouslyReturnedQty;
+
+                            if (returnQty > availableReturnQty) {
+                                res.status(StatusCodes.BAD_REQUEST);
+                                throw new Error(`Cannot return ${returnQty} units for item. Max returnable quantity for GRN line is ${availableReturnQty} (Received: ${receivedQty}, Previously Returned: ${previouslyReturnedQty}).`);
+                            }
+                        }
+                    } else {
                         resolvedGrnLineId = null;
                     }
                 }
@@ -464,34 +515,49 @@ const PurchaseReturnController = {
 
         await sequelize.transaction(async (t) => {
             await purchaseReturn.update({
-                status: normalizedStatus as "DRAFT" | "APPROVED" | "RETURNED" | "CANCELLED"
+                status: normalizedStatus as any
             }, { transaction: t });
+        });
 
-            if (normalizedStatus === "RETURNED" || normalizedStatus === "APPROVED") {
-                // 1. Deduct stock balances for returned inventory
-                await InventoryService.reduceStockFromPurchaseReturn(
-                    purchaseReturn.id,
-                    companyId,
-                    user_id,
-                    t
-                );
-
-                // 2. Post GL Entry (Debit Accounts Payable / Vendor Credit, Credit Inventory Asset)
-                await GLImpactService.processPurchaseReturnPosting(
-                    purchaseReturn.id,
-                    companyId,
-                    user_id,
-                    undefined,
-                    undefined,
-                    t
-                );
-            }
+        const updatedReturn = await PurchaseReturnHeader.findOne({
+            where: { id: Number(id), companyId },
+            include: [
+                {
+                    model: PurchaseInvoiceHeader,
+                    as: "purchaseInvoiceHeader",
+                    attributes: ["id", "invoiceNumber"],
+                    required: false,
+                },
+                {
+                    model: PurchaseOrder,
+                    as: "purchaseOrderHeader",
+                    attributes: ["id", "purchaseNo"],
+                    required: false,
+                },
+                {
+                    model: VendorDetails,
+                    as: "vendor",
+                    required: false,
+                },
+                {
+                    model: GRN,
+                    as: "grnHeader",
+                    attributes: ["id", "grnNo"],
+                    required: false,
+                },
+                {
+                    model: PurchaseReturnLine,
+                    as: "purchaseReturnLines",
+                    required: false,
+                    include: [itemIncludeConfig],
+                },
+            ],
         });
 
         res.status(StatusCodes.OK).json({
             success: true,
             message: "Purchase return status updated successfully",
-            result: purchaseReturn,
+            result: updatedReturn,
         });
     }),
 
