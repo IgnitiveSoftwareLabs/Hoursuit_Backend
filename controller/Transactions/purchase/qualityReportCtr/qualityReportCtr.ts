@@ -1,4 +1,4 @@
-﻿import { Response } from "express";
+import { Response } from "express";
 import asyncHandler from "express-async-handler";
 import { StatusCodes } from "http-status-codes";
 import { Op } from "sequelize";
@@ -186,7 +186,7 @@ const QualityReportController = {
                 {
                     model: VendorDetails,
                     as: "vendor",
-                    attributes: ["id", "vendor_name"],
+                    attributes: ["id", "company_name"],
                     required: false,
                 },
                 {
@@ -236,7 +236,7 @@ const QualityReportController = {
                 {
                     model: VendorDetails,
                     as: "vendor",
-                    attributes: ["id", "vendor_name"],
+                    attributes: ["id", "company_name"],
                     required: false,
                 },
                 {

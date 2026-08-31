@@ -26,12 +26,27 @@ import sequelize from "../../../../dbconfig/dbconfig";
 import { normalizePurchaseOrderStatus } from "../../../../utils/p2pStatus";
 
 import ChartOfAccountMaster from "../../../../modals/masters/chartOfAccount/chartOfAccount";
+import CurrencyMaster from "../../../../modals/masters/currency/currencyMaster";
+import VendorAddressBook from "../../../../modals/masters/vendorDetails/VendorAddressBook";
+import ClassMaster from "../../../../modals/masters/class/classMaster";
+import DepartmentMaster from "../../../../modals/masters/department/departmentMaster";
 
 const normalizeOptionalId = (value: unknown) => {
-    if (value === null || value === "") {
+    if (value === null || value === "" || value === undefined || value === "null" || value === "undefined") {
         return null;
     }
-    return Number(value);
+    const num = Number(value);
+    return Number.isNaN(num) ? null : num;
+};
+
+export const isDecimalAllowedForUOM = (uomObjOrName: any): boolean => {
+    if (!uomObjOrName) return true;
+    if (typeof uomObjOrName === "object" && uomObjOrName.allow_decimals !== undefined && uomObjOrName.allow_decimals !== null) {
+        return Boolean(uomObjOrName.allow_decimals);
+    }
+    const name = String(typeof uomObjOrName === "object" ? uomObjOrName.uom_name || uomObjOrName.name || "" : uomObjOrName).trim().toUpperCase();
+    const DISCRETE_UOMS = ["EACH", "EA", "PCS", "PIECE", "PIECES", "BOX", "BOXES", "UNIT", "UNITS", "PAIR", "PAIRS", "SET", "SETS", "NOS", "NUMBER", "NUMBERS", "BAG", "BAGS", "PACK", "PACKS", "CARTON", "CARTONS", "DRUM", "DRUMS", "BOTTLE", "BOTTLES", "CAN", "CANS", "ROLL", "ROLLS", "BARREL", "BARRELS"];
+    return !DISCRETE_UOMS.includes(name);
 };
 
 const itemIncludeConfig = {
@@ -84,23 +99,28 @@ const PurchaseOrderController = {
 
             const headerPayload: any = {
                 purchaseNo: autoPurchaseNo,
-                vendor_id: Number(header.vendor_id),
+                vendor_id: normalizeOptionalId(header.vendor_id),
                 purchaseDate: header.purchaseDate ? new Date(header.purchaseDate) : null,
                 deliveryDate: header.deliveryDate ? new Date(header.deliveryDate) : null,
                 deliveredDate: header.deliveredDate ? new Date(header.deliveredDate) : null,
                 shipped_from: header.shipped_from || null,
                 shipped_to: header.shipped_to || null,
-                city_id: Number(header.city_id),
-                work_order_no: String(header.work_order_no || "").trim(),
-                transportation_mode_id: Number(header.transportation_mode_id),
+                city_id: normalizeOptionalId(header.city_id),
+                work_order_no: header.work_order_no ? String(header.work_order_no).trim() : null,
+                transportation_mode_id: normalizeOptionalId(header.transportation_mode_id),
                 vehicleNumber: header.vehicleNumber || null,
                 transporterName: header.transporterName || null,
                 driverName: header.driverName || null,
                 driverPhone: header.driverPhone || null,
-                warehouse_id: Number(header.warehouse_id),
+                warehouse_id: normalizeOptionalId(header.warehouse_id),
                 godown_id: normalizeOptionalId(header.godown_id),
                 stack_id: normalizeOptionalId(header.stack_id),
-                subsidiary_id: Number(header.subsidiary_id),
+                subsidiary_id: normalizeOptionalId(header.subsidiary_id),
+                currency_id: normalizeOptionalId(header.currency_id),
+                vendor_address_id: normalizeOptionalId(header.vendor_address_id),
+                billing_address: header.billing_address || null,
+                class_id: normalizeOptionalId(header.class_id),
+                department_id: normalizeOptionalId(header.department_id),
                 status: normalizePurchaseOrderStatus(header.status, "DRAFT"),
                 remarks: header.remarks || null,
                 CompanyId,
@@ -121,18 +141,6 @@ const PurchaseOrderController = {
             if (!headerPayload.city_id) {
                 res.status(StatusCodes.BAD_REQUEST);
                 throw new Error("city is required");
-            }
-            if (!headerPayload.work_order_no) {
-                res.status(StatusCodes.BAD_REQUEST);
-                throw new Error("work order number is required");
-            }
-            if (!headerPayload.transportation_mode_id) {
-                res.status(StatusCodes.BAD_REQUEST);
-                throw new Error("transportation mode is required");
-            }
-            if (!headerPayload.warehouse_id) {
-                res.status(StatusCodes.BAD_REQUEST);
-                throw new Error("warehouse is required");
             }
             if (!headerPayload.subsidiary_id) {
                 res.status(StatusCodes.BAD_REQUEST);
@@ -164,13 +172,13 @@ const PurchaseOrderController = {
                     item_id: Number(lineItem.item_id),
                     hsn_sac_id: normalizeOptionalId(lineItem.hsn_sac_id),
                     work_category_id: normalizeOptionalId(lineItem.work_category_id),
-                    work_order_no: String(lineItem.work_order_no || headerPayload.work_order_no || "").trim(),
+                    work_order_no: lineItem.work_order_no ? String(lineItem.work_order_no).trim() : null,
                     lot_number: lineItem.lot_number || null,
                     quantity,
                     uom_id: Number(lineItem.uom_id),
                     rate,
                     amount,
-                    ndian_tax_nature: lineItem.ndian_tax_nature || null,
+                    indian_tax_nature: lineItem.indian_tax_nature || lineItem.ndian_tax_nature || null,
                     use_rate_calculation:
                         lineItem.use_rate_calculation !== undefined
                             ? Boolean(lineItem.use_rate_calculation)
@@ -190,10 +198,6 @@ const PurchaseOrderController = {
                     res.status(StatusCodes.BAD_REQUEST);
                     throw new Error(`item is required in line item ${index + 1}`);
                 }
-                if (!linePayload.work_order_no) {
-                    res.status(StatusCodes.BAD_REQUEST);
-                    throw new Error(`work order no. is required in line item ${index + 1}`);
-                }
                 if (!linePayload.quantity || linePayload.quantity <= 0) {
                     res.status(StatusCodes.BAD_REQUEST);
                     throw new Error(`quantity must be greater than zero in line item ${index + 1}`);
@@ -202,6 +206,15 @@ const PurchaseOrderController = {
                     res.status(StatusCodes.BAD_REQUEST);
                     throw new Error(`uom is required in line item ${index + 1}`);
                 }
+
+                if (linePayload.uom_id) {
+                    const uomObj = await UOMMaster.findByPk(linePayload.uom_id, { transaction });
+                    if (uomObj && !isDecimalAllowedForUOM(uomObj) && (linePayload.quantity % 1 !== 0)) {
+                        res.status(StatusCodes.BAD_REQUEST);
+                        throw new Error(`Quantity for UOM '${uomObj.uom_name}' must be a whole number (no decimals allowed) in line item ${index + 1}`);
+                    }
+                }
+
                 if (linePayload.rate !== null && linePayload.rate !== undefined && linePayload.rate < 0) {
                     res.status(StatusCodes.BAD_REQUEST);
                     throw new Error(`rate cannot be negative in line item ${index + 1}`);
@@ -273,7 +286,23 @@ const PurchaseOrderController = {
                 {
                     model: Vendor,
                     as: "vendor",
-                    attributes: ["id", "vendor_name"]
+                    attributes: ["id", "company_name", "first_name", "last_name", "salutation", "currency_id"],
+                    include: [
+                        { association: "addressBook", include: ["city", "state"] },
+                        { association: "currency" }
+                    ]
+                },
+                {
+                    model: CurrencyMaster,
+                    as: "currency",
+                    attributes: ["id", "currency_name", "currency_code", "currency_symbol"],
+                    required: false,
+                },
+                {
+                    model: VendorAddressBook,
+                    as: "vendorAddress",
+                    include: ["city", "state"],
+                    required: false,
                 },
                 {
                     model: TransportationMode,
@@ -301,6 +330,21 @@ const PurchaseOrderController = {
                     model: SubsidiaryMaster,
                     as: "subsidiary",
                     attributes: ["id", "subsidiary_name"],
+                },
+                {
+                    model: CurrencyMaster,
+                    as: "currency",
+                    required: false,
+                },
+                {
+                    model: ClassMaster,
+                    as: "class",
+                    required: false,
+                },
+                {
+                    model: DepartmentMaster,
+                    as: "department",
+                    required: false,
                 },
                 {
                     model: PurchaseOrderLine,
@@ -362,7 +406,7 @@ const PurchaseOrderController = {
                 {
                     model: Vendor,
                     as: "vendor",
-                    attributes: ["id", "vendor_name"]
+                    attributes: ["id", "company_name"]
                 },
                 {
                     model: CityMaster,
@@ -377,7 +421,7 @@ const PurchaseOrderController = {
                 {
                     model: Warehouse,
                     as: "warehouse",
-                    attributes: ["id", "warehouse_name"],
+                    attributes: ["id", "name"],
                 },
                 {
                     model: SubsidiaryMaster,
@@ -385,15 +429,30 @@ const PurchaseOrderController = {
                     attributes: ["id", "subsidiary_name"],
                 },
                 {
+                    model: CurrencyMaster,
+                    as: "currency",
+                    required: false,
+                },
+                {
+                    model: ClassMaster,
+                    as: "class",
+                    required: false,
+                },
+                {
+                    model: DepartmentMaster,
+                    as: "department",
+                    required: false,
+                },
+                {
                     model: Godown,
                     as: "godown",
-                    attributes: ["id", "godown_name"],
+                    attributes: ["id", "name"],
                     required: false,
                 },
                 {
                     model: Stack,
                     as: "stack",
-                    attributes: ["id", "stack_name"],
+                    attributes: ["id", "name"],
                     required: false,
                 },
                 {
@@ -408,11 +467,6 @@ const PurchaseOrderController = {
                             model: WorkCategory,
                             as: "workCategory",
                             attributes: ["id", "work_category_name"],
-                        },
-                        {
-                            model: Warehouse,
-                            as: "warehouse",
-                            attributes: ["id", "warehouse_name"],
                         },
                     ],
                 },
@@ -484,17 +538,22 @@ const PurchaseOrderController = {
                 deliveredDate: header.deliveredDate ? new Date(header.deliveredDate) : null,
                 shipped_from: header.shipped_from || null,
                 shipped_to: header.shipped_to || null,
-                city_id: Number(header.city_id),
-                work_order_no: String(header.work_order_no || "").trim(),
-                transportation_mode_id: Number(header.transportation_mode_id),
+                city_id: normalizeOptionalId(header.city_id),
+                work_order_no: header.work_order_no ? String(header.work_order_no).trim() : null,
+                transportation_mode_id: normalizeOptionalId(header.transportation_mode_id),
                 vehicleNumber: header.vehicleNumber || null,
                 transporterName: header.transporterName || null,
                 driverName: header.driverName || null,
                 driverPhone: header.driverPhone || null,
-                warehouse_id: Number(header.warehouse_id),
+                warehouse_id: normalizeOptionalId(header.warehouse_id),
                 godown_id: normalizeOptionalId(header.godown_id),
                 stack_id: normalizeOptionalId(header.stack_id),
-                subsidiary_id: Number(header.subsidiary_id),
+                subsidiary_id: normalizeOptionalId(header.subsidiary_id),
+                currency_id: normalizeOptionalId(header.currency_id),
+                vendor_address_id: normalizeOptionalId(header.vendor_address_id),
+                billing_address: header.billing_address || null,
+                class_id: normalizeOptionalId(header.class_id),
+                department_id: normalizeOptionalId(header.department_id),
                 status: normalizePurchaseOrderStatus(header.status || existingPurchaseOrder.status, existingPurchaseOrder.status || "DRAFT"),
                 remarks: header.remarks || null,
                 CompanyId,
@@ -521,18 +580,6 @@ const PurchaseOrderController = {
             if (!headerPayload.city_id) {
                 res.status(StatusCodes.BAD_REQUEST);
                 throw new Error("city is required");
-            }
-            if (!headerPayload.work_order_no) {
-                res.status(StatusCodes.BAD_REQUEST);
-                throw new Error("Work order no is required");
-            }
-            if (!headerPayload.transportation_mode_id) {
-                res.status(StatusCodes.BAD_REQUEST);
-                throw new Error("transportation mode is required");
-            }
-            if (!headerPayload.warehouse_id) {
-                res.status(StatusCodes.BAD_REQUEST);
-                throw new Error("warehouse is required");
             }
             if (!headerPayload.subsidiary_id) {
                 res.status(StatusCodes.BAD_REQUEST);
@@ -571,13 +618,13 @@ const PurchaseOrderController = {
                     item_id: Number(lineItem.item_id),
                     hsn_sac_id: normalizeOptionalId(lineItem.hsn_sac_id),
                     work_category_id: normalizeOptionalId(lineItem.work_category_id),
-                    work_order_no: String(lineItem.work_order_no || headerPayload.work_order_no || "").trim(),
+                    work_order_no: lineItem.work_order_no ? String(lineItem.work_order_no).trim() : null,
                     lot_number: lineItem.lot_number || null,
                     quantity,
                     uom_id: Number(lineItem.uom_id),
                     rate,
                     amount,
-                    ndian_tax_nature: lineItem.ndian_tax_nature || null,
+                    indian_tax_nature: lineItem.indian_tax_nature || lineItem.ndian_tax_nature || null,
                     use_rate_calculation:
                         lineItem.use_rate_calculation !== undefined
                             ? Boolean(lineItem.use_rate_calculation)
@@ -597,13 +644,17 @@ const PurchaseOrderController = {
                     res.status(StatusCodes.BAD_REQUEST);
                     throw new Error("item is required in each line item");
                 }
-                if (!linePayload.work_order_no) {
+                if (!linePayload.uom_id) {
                     res.status(StatusCodes.BAD_REQUEST);
-                    throw new Error("work order no is required in each line item");
+                    throw new Error("uom is required in each line item");
                 }
-                if (!linePayload.quantity || linePayload.quantity <= 0) {
-                    res.status(StatusCodes.BAD_REQUEST);
-                    throw new Error("quantity must be greater than zero in each line item");
+
+                if (linePayload.uom_id) {
+                    const uomObj = await UOMMaster.findByPk(linePayload.uom_id, { transaction });
+                    if (uomObj && !isDecimalAllowedForUOM(uomObj) && (linePayload.quantity % 1 !== 0)) {
+                        res.status(StatusCodes.BAD_REQUEST);
+                        throw new Error(`Quantity for UOM '${uomObj.uom_name}' must be a whole number (no decimals allowed).`);
+                    }
                 }
                 if (!linePayload.uom_id) {
                     res.status(StatusCodes.BAD_REQUEST);

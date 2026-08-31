@@ -10,7 +10,7 @@ import UOMMaster from "../../modals/masters/UOM/UOMMaster";
 const UOMMasterController = {
     // Create new UOM
     createUOM: asyncHandler(async (req: CustomRequest, res: Response) => {
-        const { uom_name, subsidiary_id } = req.body;
+        const { uom_name, subsidiary_id, allow_decimals } = req.body;
         const userId = req.user?.id;
         if (!userId) {
             res.status(StatusCodes.UNAUTHORIZED);
@@ -46,6 +46,7 @@ const UOMMasterController = {
         const uom = await UOMMaster.create({
             uom_name,
             subsidiary_id: subsidiary_id || null,
+            allow_decimals: allow_decimals !== undefined ? Boolean(allow_decimals) : true,
             CompanyId: company.id,
             user_id: userId,
             isActive: true,
@@ -121,7 +122,7 @@ const UOMMasterController = {
     // Update UOM
     updateUOM: asyncHandler(async (req: CustomRequest, res: Response) => {
         const { id } = req.params;
-        const { uom_name, isActive, subsidiary_id } = req.body;
+        const { uom_name, isActive, subsidiary_id, allow_decimals } = req.body;
 
         if (!id || isNaN(Number(id))) {
             res.status(StatusCodes.BAD_REQUEST);
@@ -137,6 +138,7 @@ const UOMMasterController = {
         // Update fields if provided
         if (uom_name) uom.uom_name = uom_name;
         if (isActive !== undefined) uom.isActive = isActive;
+        if (allow_decimals !== undefined) uom.allow_decimals = Boolean(allow_decimals);
         if (subsidiary_id !== undefined) {
             if (subsidiary_id === null || subsidiary_id === "") {
                 uom.subsidiary_id = null;

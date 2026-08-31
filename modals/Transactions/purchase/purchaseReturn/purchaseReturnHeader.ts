@@ -155,17 +155,17 @@ PurchaseReturnHeader.init(
     }
 );
 
-PurchaseReturnHeader.belongsTo(PurchaseOrder, { foreignKey: "PurchaseOrderHeaderId", as: "purchaseOrderHeader", onDelete: "CASCADE" });
-PurchaseReturnHeader.belongsTo(PurchaseInvoiceHeader, { foreignKey: "PurchaseInvoiceHeaderId", as: "purchaseInvoiceHeader", onDelete: "CASCADE" });
-PurchaseReturnHeader.belongsTo(Company, { foreignKey: "CompanyId", as: "company", onDelete: "CASCADE" });
+PurchaseReturnHeader.belongsTo(PurchaseOrder, { foreignKey: "purchaseOrderHeaderId", as: "purchaseOrderHeader", onDelete: "CASCADE" });
+PurchaseReturnHeader.belongsTo(PurchaseInvoiceHeader, { foreignKey: "purchaseInvoiceHeaderId", as: "purchaseInvoiceHeader", onDelete: "CASCADE" });
+PurchaseReturnHeader.belongsTo(Company, { foreignKey: "companyId", as: "company", onDelete: "CASCADE" });
 User.hasMany(PurchaseReturnHeader, { foreignKey: "user_id", as: "purchaseReturnHeaders", onDelete: "CASCADE" });
 PurchaseReturnHeader.belongsTo(User, { foreignKey: "user_id", as: "user", onDelete: "CASCADE" });
-PurchaseReturnHeader.belongsTo(VendorDetails, { foreignKey: "VendorId", as: "vendor", onDelete: "CASCADE" });
-PurchaseReturnHeader.belongsTo(GRN, { foreignKey: "GrnHeaderId", as: "grnHeader", onDelete: "CASCADE" });
-Company.hasMany(PurchaseReturnHeader, { foreignKey: "CompanyId", as: "purchaseReturnHeaders", onDelete: "CASCADE" });
-VendorDetails.hasMany(PurchaseReturnHeader, { foreignKey: "VendorId", as: "purchaseReturnHeaders", onDelete: "CASCADE" });
-PurchaseOrder.hasMany(PurchaseReturnHeader, { foreignKey: "PurchaseOrderHeaderId", as: "purchaseReturnHeaders", onDelete: "CASCADE" });
-PurchaseInvoiceHeader.hasMany(PurchaseReturnHeader, { foreignKey: "PurchaseInvoiceHeaderId", as: "purchaseReturnHeaders", onDelete: "CASCADE" });
-GRN.hasMany(PurchaseReturnHeader, { foreignKey: "GrnHeaderId", as: "purchaseReturnHeaders", onDelete: "CASCADE" });
+PurchaseReturnHeader.belongsTo(VendorDetails, { foreignKey: "vendorId", as: "vendor", onDelete: "CASCADE" });
+PurchaseReturnHeader.belongsTo(GRN, { foreignKey: "grnHeaderId", as: "grnHeader", onDelete: "CASCADE" });
+Company.hasMany(PurchaseReturnHeader, { foreignKey: "companyId", as: "purchaseReturnHeaders", onDelete: "CASCADE" });
+VendorDetails.hasMany(PurchaseReturnHeader, { foreignKey: "vendorId", as: "purchaseReturnHeaders", onDelete: "CASCADE" });
+PurchaseOrder.hasMany(PurchaseReturnHeader, { foreignKey: "purchaseOrderHeaderId", as: "purchaseReturnHeaders", onDelete: "CASCADE" });
+PurchaseInvoiceHeader.hasMany(PurchaseReturnHeader, { foreignKey: "purchaseInvoiceHeaderId", as: "purchaseReturnHeaders", onDelete: "CASCADE" });
+GRN.hasMany(PurchaseReturnHeader, { foreignKey: "grnHeaderId", as: "purchaseReturnHeaders", onDelete: "CASCADE" });
 
 export default PurchaseReturnHeader;

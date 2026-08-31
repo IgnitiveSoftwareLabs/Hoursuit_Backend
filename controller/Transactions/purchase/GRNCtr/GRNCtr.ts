@@ -7,6 +7,8 @@ import ChartOfAccountMaster from "../../../../modals/masters/chartOfAccount/char
 import { GRN, GRNLine } from "../../../../modals/Transactions/purchase/GRN";
 import { findCompanyForUser } from "../../../../utils/findCompanyForUser";
 import Warehouse from "../../../../modals/masters/warehouse/warehouse";
+import TransportationMode from "../../../../modals/masters/transportMode/transportMode";
+import CityMaster from "../../../../modals/masters/city/city";
 import { InventoryService } from "../../../../utils/inventoryService";
 import ItemMaster from "../../../../modals/masters/items/itemMaster";
 import { GLImpactService } from "../../../../utils/glImpactService";
@@ -16,12 +18,10 @@ import {
     PurchaseOrder,
     PurchaseOrderLine
 } from "../../../../modals/Transactions/purchase/purchaseOrder";
-import Godown from "../../../../modals/masters/godown/godown";
-import Stack from "../../../../modals/masters/stack/stack";
 import sequelize from "../../../../dbconfig/dbconfig";
 
 const normalizeOptionalId = (value: unknown) => {
-    if (value === null || value === "") {
+    if (value === null || value === undefined || value === "") {
         return null;
     }
     return Number(value);
@@ -82,22 +82,21 @@ const GRNController = {
             const headerPayload: any = {
                 grnNo,
                 purchaseOrderId: normalizeOptionalId(header.purchaseOrderId),
-                warehouseId: Number(header.warehouseId),
-                godownId: normalizeOptionalId(header.godownId) ? Number(header.godownId) : null,
-                stackId: normalizeOptionalId(header.stackId) ? Number(header.stackId) : null,
+                warehouseId: normalizeOptionalId(header.warehouseId),
+                godownId: normalizeOptionalId(header.godownId),
+                stackId: normalizeOptionalId(header.stackId),
+                transportationModeId: normalizeOptionalId(header.transportationModeId),
                 grnDate: header.grnDate ? new Date(header.grnDate) : null,
                 vehicleNo: header.vehicleNo || null,
                 driverName: header.driverName || null,
+                driverPhoneNo: header.driverPhoneNo || header.driverPhone || null,
+                memo: header.memo || null,
                 status: normalizeGRNStatus(header.status, "DRAFT"),
                 remarks: header.remarks || null,
                 CompanyId,
                 user_id,
             };
 
-            if (!headerPayload.warehouseId) {
-                res.status(StatusCodes.BAD_REQUEST);
-                throw new Error("warehouseId is required");
-            }
             if (!headerPayload.grnDate || Number.isNaN(headerPayload.grnDate.getTime())) {
                 res.status(StatusCodes.BAD_REQUEST);
                 throw new Error("Valid grnDate is required");
@@ -120,12 +119,12 @@ const GRNController = {
                 const linePayload: any = {
                     purchaseOrderLineId: normalizeOptionalId(lineItem.purchaseOrderLineId),
                     itemId: Number(lineItem.itemId),
+                    locationId: normalizeOptionalId(lineItem.locationId || lineItem.location_id),
+                    onHand: lineItem.onHand !== undefined && lineItem.onHand !== "" ? Number(lineItem.onHand) : 0,
                     orderedQty,
                     receivedQty,
                     acceptedQty,
                     rejectedQty,
-                    batchNo: lineItem.batchNo || null,
-                    serialNo: lineItem.serialNo || null,
                     manufacturingDate: lineItem.manufacturingDate ? new Date(lineItem.manufacturingDate) : null,
                     expiryDate: lineItem.expiryDate ? new Date(lineItem.expiryDate) : null,
                     qcRequired: Boolean(lineItem.qcRequired),
@@ -139,10 +138,6 @@ const GRNController = {
                     res.status(StatusCodes.BAD_REQUEST);
                     throw new Error(`itemId is required in line item ${index + 1}`);
                 }
-                // if (!linePayload.warehouseId) {
-                //     res.status(StatusCodes.BAD_REQUEST);
-                //     throw new Error(`warehouseId is required in line item ${index + 1}`);
-                // }
                 if (!linePayload.orderedQty || linePayload.orderedQty <= 0) {
                     res.status(StatusCodes.BAD_REQUEST);
                     throw new Error(`orderedQty must be greater than zero in line item ${index + 1}`);
@@ -170,6 +165,26 @@ const GRNController = {
                 linePayload.grnHeaderId = createdHeader.id;
                 const createdLine = await GRNLine.create(linePayload, { transaction });
                 createdLineItems.push(createdLine);
+            }
+
+            const isActiveGRNStatus = (s: string) => ["RECEIVED", "QC_PENDING", "QC_COMPLETED", "COMPLETED"].includes(s);
+            if (isActiveGRNStatus(createdHeader.status)) {
+                await InventoryService.updateStockFromGRN(
+                    createdHeader.id,
+                    createdHeader.warehouseId || 1,
+                    CompanyId,
+                    user_id,
+                    transaction
+                );
+                await GLImpactService.processGRNPosting(
+                    "GRN",
+                    createdHeader.id,
+                    CompanyId,
+                    user_id,
+                    undefined,
+                    undefined,
+                    transaction
+                );
             }
 
             await transaction.commit();
@@ -207,6 +222,7 @@ const GRNController = {
             whereClause[Op.or] = [
                 { grnNo: { [Op.like]: `%${search}%` } },
                 { vehicleNo: { [Op.like]: `%${search}%` } },
+                { driverName: { [Op.like]: `%${search}%` } },
             ];
         }
 
@@ -220,14 +236,22 @@ const GRNController = {
                     attributes: ["id", "purchaseNo", "vendor_id", "purchaseDate", "deliveryDate", "status"],
                 },
                 {
-                    model: Warehouse,
-                    as: "warehouse",
+                    model: TransportationMode,
+                    as: "transportationMode",
+                    attributes: ["id", "mode_name"],
                 },
                 {
                     model: GRNLine,
                     as: "lineItems",
                     required: false,
-                    include: [itemIncludeConfig],
+                    include: [
+                        itemIncludeConfig,
+                        {
+                            model: CityMaster,
+                            as: "location",
+                            attributes: ["id", "city_name"],
+                        },
+                    ],
                 },
             ],
             offset,
@@ -275,9 +299,9 @@ const GRNController = {
                     ],
                 },
                 {
-                    model: Warehouse,
-                    as: "warehouse",
-                    // attributes: ["id", "warehouse_name"],
+                    model: TransportationMode,
+                    as: "transportationMode",
+                    attributes: ["id", "mode_name"],
                 },
                 {
                     model: GRNLine,
@@ -285,6 +309,11 @@ const GRNController = {
                     required: false,
                     include: [
                         itemIncludeConfig,
+                        {
+                            model: CityMaster,
+                            as: "location",
+                            attributes: ["id", "city_name"],
+                        },
                         {
                             model: PurchaseOrderLine,
                             as: "purchaseOrderLine",
@@ -354,12 +383,15 @@ const GRNController = {
             const headerPayload: any = {
                 grnNo: String(header.grnNo || existingGRN.grnNo).trim(),
                 purchaseOrderId: normalizeOptionalId(header.purchaseOrderId),
-                warehouseId: Number(header.warehouseId || existingGRN.warehouseId),
-                godownId: normalizeOptionalId(header.godownId) ? Number(header.godownId) : existingGRN.godownId,
-                stackId: normalizeOptionalId(header.stackId) ? Number(header.stackId) : existingGRN.stackId,
+                warehouseId: normalizeOptionalId(header.warehouseId) ?? existingGRN.warehouseId,
+                godownId: normalizeOptionalId(header.godownId) ?? existingGRN.godownId,
+                stackId: normalizeOptionalId(header.stackId) ?? existingGRN.stackId,
+                transportationModeId: normalizeOptionalId(header.transportationModeId) ?? existingGRN.transportationModeId,
                 grnDate: header.grnDate ? new Date(header.grnDate) : existingGRN.grnDate,
                 vehicleNo: header.hasOwnProperty("vehicleNo") ? header.vehicleNo : existingGRN.vehicleNo,
                 driverName: header.hasOwnProperty("driverName") ? header.driverName : existingGRN.driverName,
+                driverPhoneNo: header.hasOwnProperty("driverPhoneNo") ? header.driverPhoneNo : (header.hasOwnProperty("driverPhone") ? header.driverPhone : existingGRN.driverPhoneNo),
+                memo: header.hasOwnProperty("memo") ? header.memo : existingGRN.memo,
                 status: normalizeGRNStatus(header.status || existingGRN.status, existingGRN.status || "DRAFT"),
                 remarks: header.hasOwnProperty("remarks") ? header.remarks : existingGRN.remarks,
                 CompanyId,
@@ -369,10 +401,6 @@ const GRNController = {
             if (!headerPayload.grnNo) {
                 res.status(StatusCodes.BAD_REQUEST);
                 throw new Error("grnNo is required");
-            }
-            if (!headerPayload.warehouseId) {
-                res.status(StatusCodes.BAD_REQUEST);
-                throw new Error("warehouseId is required");
             }
             if (!headerPayload.grnDate || Number.isNaN(headerPayload.grnDate.getTime())) {
                 res.status(StatusCodes.BAD_REQUEST);
@@ -404,12 +432,12 @@ const GRNController = {
                     grnHeaderId: existingGRN.id,
                     purchaseOrderLineId: normalizeOptionalId(lineItem.purchaseOrderLineId),
                     itemId: Number(lineItem.itemId),
+                    locationId: normalizeOptionalId(lineItem.locationId || lineItem.location_id),
+                    onHand: lineItem.onHand !== undefined && lineItem.onHand !== "" ? Number(lineItem.onHand) : 0,
                     orderedQty,
                     receivedQty,
                     acceptedQty,
                     rejectedQty,
-                    batchNo: lineItem.batchNo || null,
-                    serialNo: lineItem.serialNo || null,
                     manufacturingDate: lineItem.manufacturingDate ? new Date(lineItem.manufacturingDate) : null,
                     expiryDate: lineItem.expiryDate ? new Date(lineItem.expiryDate) : null,
                     qcRequired: lineItem.qcRequired !== undefined ? Boolean(lineItem.qcRequired) : true,
@@ -423,10 +451,6 @@ const GRNController = {
                     res.status(StatusCodes.BAD_REQUEST);
                     throw new Error(`itemId is required in line item ${index + 1}`);
                 }
-                // if (!linePayload.warehouseId) {
-                //     res.status(StatusCodes.BAD_REQUEST);
-                //     throw new Error(`warehouseId is required in line item ${index + 1}`);
-                // }
                 if (!linePayload.orderedQty || linePayload.orderedQty <= 0) {
                     res.status(StatusCodes.BAD_REQUEST);
                     throw new Error(`orderedQty must be greater than zero in line item ${index + 1}`);
@@ -521,7 +545,7 @@ const GRNController = {
             if (isActiveGRNStatus(normalizedStatus) && !isActiveGRNStatus(previousStatus)) {
                 await InventoryService.updateStockFromGRN(
                     grn.id,
-                    grn.warehouseId,
+                    grn.warehouseId || 1,
                     CompanyId,
                     user_id,
                     t
@@ -546,7 +570,7 @@ const GRNController = {
             if (normalizedStatus === "CANCELLED" && isActiveGRNStatus(previousStatus)) {
                 await InventoryService.reverseStockFromGRN(
                     grn.id,
-                    grn.warehouseId,
+                    grn.warehouseId || 1,
                     CompanyId,
                     user_id,
                     t
@@ -600,7 +624,7 @@ const GRNController = {
     exportGRNCSV: asyncHandler(async (req: CustomRequest, res: Response) => {
         const company = await findCompanyForUser(req.user);
         const CompanyId = company?.id;
-        const { fromDate, toDate, status, purchaseOrderId, warehouseId } = req.query;
+        const { fromDate, toDate, status, purchaseOrderId } = req.query;
 
         if (!CompanyId) {
             res.status(StatusCodes.UNAUTHORIZED);
@@ -636,9 +660,6 @@ const GRNController = {
         if (purchaseOrderId) {
             whereClause.purchaseOrderId = Number(purchaseOrderId);
         }
-        if (warehouseId) {
-            whereClause.warehouseId = Number(warehouseId);
-        }
 
         const grns = await GRN.findAll({
             where: whereClause,
@@ -649,9 +670,9 @@ const GRNController = {
                     attributes: ["id", "purchaseNo"],
                 },
                 {
-                    model: Warehouse,
-                    as: "warehouse",
-                    attributes: ["id", "warehouse_name"],
+                    model: TransportationMode,
+                    as: "transportationMode",
+                    attributes: ["id", "mode_name"],
                 },
                 {
                     model: GRNLine,
@@ -664,24 +685,14 @@ const GRNController = {
                             attributes: ["id", "item_code", "item_name", "item_desc"],
                         },
                         {
+                            model: CityMaster,
+                            as: "location",
+                            attributes: ["id", "city_name"],
+                        },
+                        {
                             model: PurchaseOrderLine,
                             as: "purchaseOrderLine",
                             attributes: ["id", "quantity", "rate"],
-                        },
-                        {
-                            model: Warehouse,
-                            as: "warehouse",
-                            attributes: ["id", "warehouse_name"],
-                        },
-                        {
-                            model: Godown,
-                            as: "godown",
-                            attributes: ["id", "godown_name"],
-                        },
-                        {
-                            model: Stack,
-                            as: "stackDetail",
-                            attributes: ["id", "stack_name"],
                         },
                     ],
                 },
@@ -697,21 +708,19 @@ const GRNController = {
                         "GRN Number": grn.grnNo || "",
                         "GRN Date": grn.grnDate ? new Date(grn.grnDate).toLocaleDateString() : "",
                         "Purchase Order": grn.purchaseOrder?.purchaseNo || "",
-                        "Warehouse": grn.warehouse?.warehouse_name || "",
+                        "Transportation Mode": grn.transportationMode?.mode_name || "",
                         "Vehicle No": grn.vehicleNo || "",
                         "Driver Name": grn.driverName || "",
+                        "Driver Phone No": grn.driverPhoneNo || "",
                         Status: grn.status || "",
                         Remarks: grn.remarks || "",
                         "Item Code": lineItem.item?.item_code || "",
                         "Item Name": lineItem.item?.item_name || "",
+                        "Location": lineItem.location?.city_name || "",
+                        "On Hand Qty": lineItem.onHand || 0,
                         Quantity: lineItem.receivedQty || 0,
                         "Accepted Qty": lineItem.acceptedQty || 0,
                         "Rejected Qty": lineItem.rejectedQty || 0,
-                        "Warehouse Location": lineItem.warehouse?.warehouse_name || "",
-                        "Godown": lineItem.godown?.godown_name || "",
-                        "Stack": lineItem.stackDetail?.stack_name || "",
-                        "Batch No": lineItem.batchNo || "",
-                        "Serial No": lineItem.serialNo || "",
                         "QC Required": lineItem.qcRequired ? "YES" : "NO",
                         "Line Status": lineItem.status || "",
                     });
@@ -721,21 +730,19 @@ const GRNController = {
                     "GRN Number": grn.grnNo || "",
                     "GRN Date": grn.grnDate ? new Date(grn.grnDate).toLocaleDateString() : "",
                     "Purchase Order": grn.purchaseOrder?.purchaseNo || "",
-                    "Warehouse": grn.warehouse?.warehouse_name || "",
+                    "Transportation Mode": grn.transportationMode?.mode_name || "",
                     "Vehicle No": grn.vehicleNo || "",
                     "Driver Name": grn.driverName || "",
+                    "Driver Phone No": grn.driverPhoneNo || "",
                     Status: grn.status || "",
                     Remarks: grn.remarks || "",
                     "Item Code": "",
                     "Item Name": "",
+                    "Location": "",
+                    "On Hand Qty": 0,
                     Quantity: 0,
                     "Accepted Qty": 0,
                     "Rejected Qty": 0,
-                    "Warehouse Location": "",
-                    "Godown": "",
-                    "Stack": "",
-                    "Batch No": "",
-                    "Serial No": "",
                     "QC Required": "",
                     "Line Status": "",
                 });
@@ -746,21 +753,19 @@ const GRNController = {
             "GRN Number",
             "GRN Date",
             "Purchase Order",
-            "Warehouse",
+            "Transportation Mode",
             "Vehicle No",
             "Driver Name",
+            "Driver Phone No",
             "Status",
             "Remarks",
             "Item Code",
             "Item Name",
+            "Location",
+            "On Hand Qty",
             "Quantity",
             "Accepted Qty",
             "Rejected Qty",
-            "Warehouse Location",
-            "Godown",
-            "Stack",
-            "Batch No",
-            "Serial No",
             "QC Required",
             "Line Status",
         ];

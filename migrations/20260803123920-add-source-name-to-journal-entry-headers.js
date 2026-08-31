@@ -2,21 +2,27 @@
 
 module.exports = {
   async up(queryInterface, Sequelize) {
-    await queryInterface.addColumn(
-      "journal_entry_headers",
-      "source_name",
-      {
-        type: Sequelize.STRING(100),
-        allowNull: false,
-        defaultValue: "UNKNOWN",
-      }
-    );
+    const tableDescription = await queryInterface.describeTable("journal_entry_headers");
+    if (!tableDescription.source_name) {
+      await queryInterface.addColumn(
+        "journal_entry_headers",
+        "source_name",
+        {
+          type: Sequelize.STRING(100),
+          allowNull: false,
+          defaultValue: "UNKNOWN",
+        }
+      );
+    }
   },
 
   async down(queryInterface) {
-    await queryInterface.removeColumn(
-      "journal_entry_headers",
-      "source_name"
-    );
+    const tableDescription = await queryInterface.describeTable("journal_entry_headers");
+    if (tableDescription.source_name) {
+      await queryInterface.removeColumn(
+        "journal_entry_headers",
+        "source_name"
+      );
+    }
   },
 };

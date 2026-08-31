@@ -189,7 +189,7 @@ export const VendorCreditController = {
         const credits = await VendorCreditHeader.findAll({
             where: whereClause,
             include: [
-                { model: VendorDetails, as: "vendor", attributes: ["id", "vendor_name"] },
+                { model: VendorDetails, as: "vendor", attributes: ["id", "company_name"] },
                 { model: PurchaseReturnHeader, as: "purchaseReturnHeader", attributes: ["id", "returnNumber"] },
                 {
                     model: VendorCreditLine,
@@ -228,7 +228,7 @@ export const VendorCreditController = {
         const credit = await VendorCreditHeader.findOne({
             where: { id: Number(id), companyId },
             include: [
-                { model: VendorDetails, as: "vendor", attributes: ["id", "vendor_name"] },
+                { model: VendorDetails, as: "vendor", attributes: ["id", "company_name"] },
                 { model: PurchaseReturnHeader, as: "purchaseReturnHeader" },
                 {
                     model: VendorCreditLine,

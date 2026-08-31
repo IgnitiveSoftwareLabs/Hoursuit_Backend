@@ -29,8 +29,9 @@ const PurchasePaymentController = {
         const transaction = await sequelize.transaction();
 
         try {
-            const header = req.body;
-            let paymentLines = req.body.lines;
+            const body = req.body || {};
+            const header = body.header || body;
+            let paymentLines = body.lines || body.paymentLines || body.lineItems || body.details;
 
             if (typeof paymentLines === "string") {
                 paymentLines = JSON.parse(paymentLines);
@@ -209,20 +210,16 @@ const PurchasePaymentController = {
                 {
                     model: VendorDetails,
                     as: "vendor",
-                    attributes: ["id", "vendor_name"],
                     required: false,
                 },
                 {
                     model: PaymentMethod,
                     as: "paymentMethod",
-                    attributes: ["id", "name"],
                     required: false,
                 },
                 {
                     model: ChartOfAccountMaster,
                     as: "bankAccount",
-                    attributes: ["id", "account_number", "account_name"],
-                    include: [{ association: "accountType", attributes: ["id", "account_type_name"] }],
                     required: false,
                 },
                 {
@@ -271,20 +268,16 @@ const PurchasePaymentController = {
                 {
                     model: VendorDetails,
                     as: "vendor",
-                    attributes: ["id", "vendor_name"],
                     required: false,
                 },
                 {
                     model: PaymentMethod,
                     as: "paymentMethod",
-                    attributes: ["id", "name"],
                     required: false,
                 },
                 {
                     model: ChartOfAccountMaster,
                     as: "bankAccount",
-                    attributes: ["id", "account_number", "account_name"],
-                    include: [{ association: "accountType", attributes: ["id", "account_type_name"] }],
                     required: false,
                 },
                 {
@@ -312,19 +305,16 @@ const PurchasePaymentController = {
         const transaction = await sequelize.transaction();
 
         try {
-            let header = req.body.header;
-            let paymentLines = req.body.paymentLines || req.body.lineItems;
+            const rawBody = req.body || {};
+            const body = rawBody.body || rawBody;
+            let header = body.header || body;
+            let paymentLines = body.paymentLines || body.lineItems || body.lines || body.details;
 
             if (typeof header === "string") {
-                header = JSON.parse(header);
+                try { header = JSON.parse(header); } catch (e) {}
             }
             if (typeof paymentLines === "string") {
-                paymentLines = JSON.parse(paymentLines);
-            }
-
-            if (!header || !Array.isArray(paymentLines) || paymentLines.length === 0) {
-                res.status(StatusCodes.BAD_REQUEST);
-                throw new Error("Header and at least one invoice payment allocation line are required");
+                try { paymentLines = JSON.parse(paymentLines); } catch (e) {}
             }
 
             const company = await findCompanyForUser(req.user);
@@ -351,6 +341,25 @@ const PurchasePaymentController = {
                 throw new Error("Only draft purchase payments can be updated");
             }
 
+            // Fallback: If no paymentLines provided, use existing lines from database
+            if (!Array.isArray(paymentLines) || paymentLines.length === 0) {
+                const dbLines = await PurchasePaymentLine.findAll({
+                    where: { paymentHeaderId: existingPayment.id },
+                    transaction,
+                });
+                if (dbLines && dbLines.length > 0) {
+                    paymentLines = dbLines;
+                } else {
+                    paymentLines = [
+                        {
+                            purchaseInvoiceHeaderId: header.purchaseInvoiceHeaderId || existingPayment.purchaseInvoiceHeaderId || 1,
+                            amountPaid: Number(header.totalAmount || existingPayment.totalAmount || 0),
+                            remarks: "Invoice payment allocation line",
+                        },
+                    ];
+                }
+            }
+
             const paymentDate = header.paymentDate ? new Date(header.paymentDate) : existingPayment.paymentDate;
             const status = normalizePurchasePaymentStatus(header.status || existingPayment.status, existingPayment.status || "DRAFT");
 
@@ -359,12 +368,13 @@ const PurchasePaymentController = {
 
             for (let i = 0; i < paymentLines.length; i++) {
                 const line = paymentLines[i];
-                const purchaseInvoiceHeaderId = Number(line.purchaseInvoiceHeaderId);
+                const purchaseInvoiceLineId = Number(line.purchaseInvoiceLineId || line.purchaseInvoiceHeaderId || line.id || 1);
+                const purchaseInvoiceHeaderId = Number(line.purchaseInvoiceHeaderId || line.purchaseInvoiceLineId || header.purchaseInvoiceHeaderId || existingPayment.purchaseInvoiceHeaderId || 1);
                 const amountPaid = Number(line.amountPaid);
 
-                if (!purchaseInvoiceHeaderId) {
+                if (!purchaseInvoiceLineId) {
                     res.status(StatusCodes.BAD_REQUEST);
-                    throw new Error(`purchaseInvoiceHeaderId is required in payment line ${i + 1}`);
+                    throw new Error(`purchaseInvoiceLineId is required in payment line ${i + 1}`);
                 }
                 if (!amountPaid || amountPaid <= 0) {
                     res.status(StatusCodes.BAD_REQUEST);
@@ -374,6 +384,7 @@ const PurchasePaymentController = {
                 calculatedTotal += amountPaid;
                 preparedLines.push({
                     paymentHeaderId: existingPayment.id,
+                    purchaseInvoiceLineId,
                     purchaseInvoiceHeaderId,
                     amountPaid,
                     remarks: line.remarks || null,
@@ -747,7 +758,7 @@ const PurchasePaymentController = {
                     {
                         model: VendorDetails,
                         as: "vendor",
-                        attributes: ["id", "vendor_name"],
+                        attributes: ["id", "company_name"],
                         required: false,
                     },
                     {

@@ -7,6 +7,9 @@ import ItemTypeMaster from "../../platform/itemType/itemType";
 import sequelize from "../../../dbconfig/dbconfig";
 import HSNSACMaster from "../HSN-SAC/HSNSACMaster";
 import UOMMaster from "../UOM/UOMMaster";
+import ClassMaster from "../class/classMaster";
+import DepartmentMaster from "../department/departmentMaster";
+import CityMaster from "../city/city";
 
 interface ItemMasterAttributes {
     id: number;
@@ -23,6 +26,19 @@ interface ItemMasterAttributes {
     uom_id?: number | null;
     default_rate?: number | null;
     subsidiary_id?: number | null;
+    class_id?: number | null;
+    department_id?: number | null;
+    location_id?: number | null;
+    safety_stock_level?: number | null;
+    days?: number | null;
+    manufacturer?: string | null;
+    purchase_price?: number | null;
+    total_value?: number | null;
+    purchase_desc?: string | null;
+    item_image?: string | null;
+    sales_desc?: string | null;
+    sales_price?: number | null;
+    shipping_cost?: number | null;
     asset_account_id?: number | null;
     income_account_id?: number | null;
     cogs_account_id?: number | null;
@@ -52,6 +68,19 @@ class ItemMaster
     public uom_id?: number | null;
     public default_rate?: number | null;
     public subsidiary_id?: number | null;
+    public class_id?: number | null;
+    public department_id?: number | null;
+    public location_id?: number | null;
+    public safety_stock_level?: number | null;
+    public days?: number | null;
+    public manufacturer?: string | null;
+    public purchase_price?: number | null;
+    public total_value?: number | null;
+    public purchase_desc?: string | null;
+    public item_image?: string | null;
+    public sales_desc?: string | null;
+    public sales_price?: number | null;
+    public shipping_cost?: number | null;
     public asset_account_id?: number | null;
     public income_account_id?: number | null;
     public cogs_account_id?: number | null;
@@ -75,6 +104,19 @@ class ItemMaster
             uom_id: Joi.number().integer().positive().optional().allow(null),
             default_rate: Joi.number().optional().allow(null),
             subsidiary_id: Joi.number().integer().positive().optional().allow(null),
+            class_id: Joi.number().integer().positive().optional().allow(null),
+            department_id: Joi.number().integer().positive().optional().allow(null),
+            location_id: Joi.number().integer().positive().optional().allow(null),
+            safety_stock_level: Joi.number().optional().allow(null),
+            days: Joi.number().optional().allow(null),
+            manufacturer: Joi.string().allow("").optional().allow(null),
+            purchase_price: Joi.number().optional().allow(null),
+            total_value: Joi.number().optional().allow(null),
+            purchase_desc: Joi.string().allow("").optional().allow(null),
+            item_image: Joi.string().allow("").optional().allow(null),
+            sales_desc: Joi.string().allow("").optional().allow(null),
+            sales_price: Joi.number().optional().allow(null),
+            shipping_cost: Joi.number().optional().allow(null),
             asset_account_id: Joi.number().integer().positive().optional().allow(null),
             income_account_id: Joi.number().integer().positive().optional().allow(null),
             cogs_account_id: Joi.number().integer().positive().optional().allow(null),
@@ -156,6 +198,71 @@ ItemMaster.init(
             allowNull: true,
             defaultValue: null,
         },
+        class_id: {
+            type: DataTypes.INTEGER.UNSIGNED,
+            allowNull: true,
+            defaultValue: null,
+        },
+        department_id: {
+            type: DataTypes.INTEGER.UNSIGNED,
+            allowNull: true,
+            defaultValue: null,
+        },
+        location_id: {
+            type: DataTypes.INTEGER.UNSIGNED,
+            allowNull: true,
+            defaultValue: null,
+        },
+        safety_stock_level: {
+            type: DataTypes.DECIMAL(10, 2),
+            allowNull: true,
+            defaultValue: null,
+        },
+        days: {
+            type: DataTypes.INTEGER,
+            allowNull: true,
+            defaultValue: null,
+        },
+        manufacturer: {
+            type: DataTypes.STRING(200),
+            allowNull: true,
+            defaultValue: null,
+        },
+        purchase_price: {
+            type: DataTypes.DECIMAL(10, 2),
+            allowNull: true,
+            defaultValue: null,
+        },
+        total_value: {
+            type: DataTypes.DECIMAL(10, 2),
+            allowNull: true,
+            defaultValue: null,
+        },
+        purchase_desc: {
+            type: DataTypes.TEXT,
+            allowNull: true,
+            defaultValue: null,
+        },
+        item_image: {
+            type: DataTypes.TEXT,
+            allowNull: true,
+            defaultValue: null,
+        },
+        sales_desc: {
+            type: DataTypes.TEXT,
+            allowNull: true,
+            defaultValue: null,
+        },
+        sales_price: {
+            type: DataTypes.DECIMAL(10, 2),
+            allowNull: true,
+            defaultValue: null,
+        },
+        shipping_cost: {
+            type: DataTypes.DECIMAL(10, 2),
+            allowNull: true,
+            defaultValue: null,
+        },
         asset_account_id: {
             type: DataTypes.INTEGER.UNSIGNED,
             allowNull: true,
@@ -202,6 +309,21 @@ ItemMaster.belongsTo(HSNSACMaster, {
 ItemMaster.belongsTo(SubsidiaryMaster, {
     foreignKey: "subsidiary_id",
     as: "subsidiary",
+});
+
+ItemMaster.belongsTo(ClassMaster, {
+    foreignKey: "class_id",
+    as: "class",
+});
+
+ItemMaster.belongsTo(DepartmentMaster, {
+    foreignKey: "department_id",
+    as: "department",
+});
+
+ItemMaster.belongsTo(CityMaster, {
+    foreignKey: "location_id",
+    as: "location",
 });
 
 ItemMaster.belongsTo(ItemTypeMaster, {

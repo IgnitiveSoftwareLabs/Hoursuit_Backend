@@ -17,9 +17,9 @@ export const InventoryService = {
 
     updateStockFromGRN: async (
     grnId: number,
-    warehouseId: number,
-    companyId: number,
-    userId: number,
+    warehouseId?: number,
+    companyId?: number,
+    userId?: number,
     transaction?: Transaction
   ) => {
     // Fetch GRN Header along with Lines, ItemMaster and PurchaseOrderLine
@@ -51,7 +51,7 @@ export const InventoryService = {
 
       if (qty <= 0) continue;
 
-      const rate = Number(itemLine.purchaseOrderLine?.rate || 0);
+      const rate = Number(itemLine.unitPrice || itemLine.unit_price || itemLine.rate || itemLine.purchaseOrderLine?.rate || 0);
       const itemId = itemLine.itemId || itemLine.item_id || itemLine.item?.id;
       const uomId = itemLine.uom_id || itemLine.item?.uom_id || 1;
 
@@ -67,13 +67,13 @@ export const InventoryService = {
           uom_id: uomId,
           rate,
           amount: qty * rate,
-          warehouseId: warehouseId || (grn as any).warehouseId || itemLine.warehouseId,
+          warehouseId: warehouseId || (grn as any).warehouseId || itemLine.locationId || itemLine.warehouseId || 1,
           godownId: itemLine.godownId || (grn as any).godownId || null,
           stack: itemLine.stack || (grn as any).stackId || null,
           customer_id: null,
           lot_number: itemLine.lot_number || "GENERAL",
-          CompanyId: companyId,
-          user_id: userId,
+          CompanyId: companyId!,
+          user_id: userId!,
           operation: "ADD"
         },
         transaction
@@ -113,9 +113,9 @@ export const InventoryService = {
    */
   reverseStockFromGRN: async (
     grnId: number,
-    warehouseId: number,
-    companyId: number,
-    userId: number,
+    warehouseId?: number,
+    companyId?: number,
+    userId?: number,
     transaction?: Transaction
   ) => {
     const grn = await GRN.findOne({
@@ -157,13 +157,13 @@ export const InventoryService = {
           uom_id: uomId,
           rate,
           amount: qty * rate,
-          warehouseId: warehouseId || (grn as any).warehouseId || itemLine.warehouseId,
+          warehouseId: warehouseId || (grn as any).warehouseId || itemLine.locationId || itemLine.warehouseId || 1,
           godownId: itemLine.godownId || (grn as any).godownId || null,
           stack: itemLine.stack || (grn as any).stackId || null,
           customer_id: null,
           lot_number: itemLine.lot_number || "GENERAL",
-          CompanyId: companyId,
-          user_id: userId,
+          CompanyId: companyId!,
+          user_id: userId!,
           operation: "SUBTRACT"
         },
         transaction

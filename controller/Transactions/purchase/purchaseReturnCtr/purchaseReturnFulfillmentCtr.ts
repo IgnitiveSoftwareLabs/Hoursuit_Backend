@@ -18,8 +18,10 @@ export const PurchaseReturnFulfillmentController = {
     createFulfillment: asyncHandler(async (req: CustomRequest, res: Response) => {
         const transaction = await sequelize.transaction();
         try {
-            let header = req.body.header;
-            let lineItems = req.body.lineItems;
+            const rawBody = req.body || {};
+            const body = rawBody.body || rawBody;
+            let header = body.header || body;
+            let lineItems = body.lineItems || body.lines || body.fulfillmentLines || body.details;
 
             if (typeof header === "string") header = JSON.parse(header);
             if (typeof lineItems === "string") lineItems = JSON.parse(lineItems);
@@ -39,6 +41,11 @@ export const PurchaseReturnFulfillmentController = {
             }
 
             const purchaseReturnHeaderId = Number(header.purchaseReturnHeaderId);
+            if (!purchaseReturnHeaderId || isNaN(purchaseReturnHeaderId)) {
+                res.status(StatusCodes.BAD_REQUEST);
+                throw new Error("Purchase Return Authorization reference is required to fulfill items.");
+            }
+
             const parentReturn = await PurchaseReturnHeader.findOne({
                 where: { id: purchaseReturnHeaderId, companyId },
                 include: [{ model: PurchaseReturnLine, as: "purchaseReturnLines" }],
@@ -48,6 +55,17 @@ export const PurchaseReturnFulfillmentController = {
             if (!parentReturn) {
                 res.status(StatusCodes.NOT_FOUND);
                 throw new Error(`Purchase Return #${purchaseReturnHeaderId} not found`);
+            }
+
+            const parentStatus = String(parentReturn.status).toUpperCase();
+            if (parentStatus === "DRAFT") {
+                res.status(StatusCodes.BAD_REQUEST);
+                throw new Error(`Purchase Return #${parentReturn.returnNumber || parentReturn.id} is in DRAFT status. It must be AUTHORIZED before fulfillment.`);
+            }
+
+            if (parentStatus === "FULFILLED") {
+                res.status(StatusCodes.BAD_REQUEST);
+                throw new Error(`Purchase Return #${parentReturn.returnNumber || parentReturn.id} is already FULFILLED and cannot be fulfilled again.`);
             }
 
             const fulfillmentNumber = String(header.fulfillmentNumber || `PRF-${Date.now()}`).trim();
@@ -211,7 +229,7 @@ export const PurchaseReturnFulfillmentController = {
             where: whereClause,
             include: [
                 { model: PurchaseReturnHeader, as: "purchaseReturnHeader", attributes: ["id", "returnNumber", "status"] },
-                { model: VendorDetails, as: "vendor", attributes: ["id", "vendor_name"] },
+                { model: VendorDetails, as: "vendor", attributes: ["id", "company_name"] },
                 {
                     model: PurchaseReturnFulfillmentLine,
                     as: "fulfillmentLines",
@@ -250,7 +268,7 @@ export const PurchaseReturnFulfillmentController = {
             where: { id: Number(id), companyId },
             include: [
                 { model: PurchaseReturnHeader, as: "purchaseReturnHeader" },
-                { model: VendorDetails, as: "vendor", attributes: ["id", "vendor_name"] },
+                { model: VendorDetails, as: "vendor", attributes: ["id", "company_name"] },
                 {
                     model: PurchaseReturnFulfillmentLine,
                     as: "fulfillmentLines",

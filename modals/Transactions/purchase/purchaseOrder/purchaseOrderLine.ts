@@ -19,13 +19,13 @@ interface PurchaseOrderLineAttributes {
     item_id: number;
     hsn_sac_id?: number;
     work_category_id?: number;
-    work_order_no: string;
+    work_order_no?: string | null;
     lot_number?: string;
     quantity: number;
     uom_id: number;
     rate?: number;
     amount?: number;
-    ndian_tax_nature?: string;
+    indian_tax_nature?: string;
     tax_rate?: number;
     tax_amount?: number;
     line_total: number;
@@ -47,14 +47,14 @@ class PurchaseOrderLine extends Model<PurchaseOrderLineAttributes, PurchaseOrder
     public purchase_order_header_id!: number;
     public item_id!: number;
     public hsn_sac_id?: number;
-    public work_order_no!: string;
+    public work_order_no?: string | null;
     public work_category_id?: number | undefined;
     public lot_number?: string;
     public quantity!: number;
     public uom_id!: number;
     public rate?: number;
     public amount?: number;
-    public ndian_tax_nature?: string;
+    public indian_tax_nature?: string;
     public tax_rate?: number;
     public tax_amount?: number;
     public line_total!: number;
@@ -74,11 +74,11 @@ class PurchaseOrderLine extends Model<PurchaseOrderLineAttributes, PurchaseOrder
             hsn_sac_id: Joi.number().integer().positive().optional().allow(null),
             lot_number: Joi.string().min(1).max(100).optional(),
             quantity: Joi.number().positive().required(),
-            work_order_no: Joi.string().min(1).max(100).required(),
+            work_order_no: Joi.string().min(1).max(100).optional().allow(null, ""),
             uom_id: Joi.number().integer().positive().required(),
             rate: Joi.number().min(0).optional(),
             amount: Joi.number().min(0).optional(),
-            ndian_tax_nature: Joi.string().valid("Good", "Services").optional(),
+            indian_tax_nature: Joi.string().valid("Good", "Services").optional(),
             use_rate_calculation: Joi.boolean().required(),
             work_category_id: Joi.number().integer().positive().optional().allow(null),
             tax_rate: Joi.number().min(0).max(100).optional(),
@@ -119,7 +119,7 @@ PurchaseOrderLine.init(
         },
         work_order_no: {
             type: DataTypes.STRING(100),
-            allowNull: false,
+            allowNull: true,
         },
         lot_number: {
             type: DataTypes.STRING(100),
@@ -147,7 +147,7 @@ PurchaseOrderLine.init(
             allowNull: true,
             defaultValue: 0,
         },
-        ndian_tax_nature: {
+        indian_tax_nature: {
             type: DataTypes.ENUM("Good", "Services"),
             allowNull: true,
         },

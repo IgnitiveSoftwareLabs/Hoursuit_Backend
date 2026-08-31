@@ -11,6 +11,10 @@ import CityMaster from "../../../masters/city/city";
 import Stack from "../../../masters/stack/stack";
 import Company from "../../../company/company";
 import User from "../../../user/user";
+import CurrencyMaster from "../../../masters/currency/currencyMaster";
+import VendorAddressBook from "../../../masters/vendorDetails/VendorAddressBook";
+import ClassMaster from "../../../masters/class/classMaster";
+import DepartmentMaster from "../../../masters/department/departmentMaster";
 
 interface PurchaseOrderAttributes {
     id: number;
@@ -21,17 +25,22 @@ interface PurchaseOrderAttributes {
     shipped_from?: string;
     shipped_to?: string;
     city_id: number;
-    work_order_no: string;
-    transportation_mode_id: number;
+    work_order_no?: string | null;
+    transportation_mode_id?: number | null;
     vehicleNumber?: string | null;
     transporterName?: string | null;
     driverName?: string | null;
     driverPhone?: string | null;
     deliveredDate?: Date | null;
-    warehouse_id: number;
+    warehouse_id?: number | null;
     godown_id?: number | null;
     stack_id?: number | null;
     subsidiary_id: number;
+    currency_id?: number | null;
+    vendor_address_id?: number | null;
+    billing_address?: string | null;
+    class_id?: number | null;
+    department_id?: number | null;
     user_id: number;
     status: string;
     remarks?: string | null;
@@ -52,16 +61,21 @@ class PurchaseOrder extends Model<PurchaseOrderAttributes, PurchaseOrderCreation
     public shipped_from?: string;
     public shipped_to?: string;
     public city_id!: number;
-    public work_order_no!: string;
-    public transportation_mode_id!: number;
+    public work_order_no?: string | null;
+    public transportation_mode_id?: number | null;
     public transporterName?: string | null;
     public driverName?: string | null;
     public driverPhone?: string | null;
     public vehicleNumber?: string | null;
-    public warehouse_id!: number;
+    public warehouse_id?: number | null;
     public godown_id?: number | null;
     public stack_id?: number | null;
     public subsidiary_id!: number;
+    public currency_id?: number | null;
+    public vendor_address_id?: number | null;
+    public billing_address?: string | null;
+    public class_id?: number | null;
+    public department_id?: number | null;
     public status!: string;
     public user_id!: number;
     public remarks?: string | null;
@@ -73,7 +87,7 @@ class PurchaseOrder extends Model<PurchaseOrderAttributes, PurchaseOrderCreation
         const schema = Joi.object({
             purchase_order_header_id: Joi.number().integer().positive().required(),
             purchaseNo: Joi.string().min(1).max(100).required(),
-            work_order_no: Joi.string().min(1).max(100).required(),
+            work_order_no: Joi.string().min(1).max(100).optional().allow(null, ""),
             vendor_id: Joi.number().integer().positive().required(),
             purchaseDate: Joi.date().required(),
             deliveryDate: Joi.date().required(),
@@ -84,11 +98,15 @@ class PurchaseOrder extends Model<PurchaseOrderAttributes, PurchaseOrderCreation
             driverPhone: Joi.string().max(100).optional().allow(null, ""),
             vehicleNumber: Joi.string().max(100).optional().allow(null, ""),
             city_id: Joi.number().integer().positive().required(),
-            transportation_mode_id: Joi.number().integer().positive().required(),
-            warehouse_id: Joi.number().integer().positive().required(),
+            transportation_mode_id: Joi.number().integer().positive().optional().allow(null),
+            warehouse_id: Joi.number().integer().positive().optional().allow(null),
             godown_id: Joi.number().integer().positive().optional().allow(null),
             stack_id: Joi.number().integer().positive().optional().allow(null),
             subsidiary_id: Joi.number().integer().positive().required(),
+            currency_id: Joi.number().integer().positive().optional().allow(null),
+            vendor_address_id: Joi.number().integer().positive().optional().allow(null),
+            class_id: Joi.number().integer().positive().optional().allow(null),
+            department_id: Joi.number().integer().positive().optional().allow(null),
             status: Joi.string().required(),
             remarks: Joi.string().max(500).optional(),
             CompanyId: Joi.number().integer().positive().required(),
@@ -120,7 +138,7 @@ PurchaseOrder.init(
         },
         work_order_no: {
             type: DataTypes.STRING,
-            allowNull: false,
+            allowNull: true,
         },
         transporterName: {
             type: DataTypes.STRING,
@@ -175,11 +193,11 @@ PurchaseOrder.init(
         },
         transportation_mode_id: {
             type: DataTypes.INTEGER.UNSIGNED,
-            allowNull: false,
+            allowNull: true,
         },
         warehouse_id: {
             type: DataTypes.INTEGER.UNSIGNED,
-            allowNull: false,
+            allowNull: true,
         },
         godown_id: {
             type: DataTypes.INTEGER.UNSIGNED,
@@ -192,6 +210,26 @@ PurchaseOrder.init(
         subsidiary_id: {
             type: DataTypes.INTEGER.UNSIGNED,
             allowNull: false,
+        },
+        currency_id: {
+            type: DataTypes.INTEGER.UNSIGNED,
+            allowNull: true,
+        },
+        vendor_address_id: {
+            type: DataTypes.INTEGER.UNSIGNED,
+            allowNull: true,
+        },
+        billing_address: {
+            type: DataTypes.TEXT,
+            allowNull: true,
+        },
+        class_id: {
+            type: DataTypes.INTEGER.UNSIGNED,
+            allowNull: true,
+        },
+        department_id: {
+            type: DataTypes.INTEGER.UNSIGNED,
+            allowNull: true,
         },
         user_id: {
             type: DataTypes.BIGINT,
@@ -236,6 +274,14 @@ PurchaseOrder.belongsTo(SubsidiaryMaster, {
     foreignKey: "subsidiary_id",
     as: "subsidiary",
 });
+PurchaseOrder.belongsTo(ClassMaster, {
+    foreignKey: "class_id",
+    as: "class",
+});
+PurchaseOrder.belongsTo(DepartmentMaster, {
+    foreignKey: "department_id",
+    as: "department",
+});
 PurchaseOrder.belongsTo(Godown, {
     foreignKey: "godown_id",
     as: "godown",
@@ -247,6 +293,14 @@ PurchaseOrder.belongsTo(Stack, {
 PurchaseOrder.belongsTo(VendorDetails, {
     foreignKey: "vendor_id",
     as: "vendor",
+});
+PurchaseOrder.belongsTo(CurrencyMaster, {
+    foreignKey: "currency_id",
+    as: "currency",
+});
+PurchaseOrder.belongsTo(VendorAddressBook, {
+    foreignKey: "vendor_address_id",
+    as: "vendorAddress",
 });
 
 // Reverse associations

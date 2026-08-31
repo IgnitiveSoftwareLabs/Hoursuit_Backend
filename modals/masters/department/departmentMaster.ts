@@ -5,57 +5,64 @@ import Company from "../../company/company";
 import User from "../../user/user";
 import SubsidiaryMaster from "../subsidiaries/subsdiaryMaster";
 
-interface UOMMasterAttributes {
+interface DepartmentMasterAttributes {
     id: number;
-    uom_name: string;
+    department_name: string;
     subsidiary_id?: number | null;
     CompanyId: number;
-    user_id: number;
+    user_id?: number | null;
     isActive: boolean;
-    allow_decimals?: boolean;
     createdAt?: Date;
     updatedAt?: Date;
 }
 
-interface UOMMasterCreationAttributes
-    extends Optional<UOMMasterAttributes, "id"> { }
+interface DepartmentMasterCreationAttributes
+    extends Optional<DepartmentMasterAttributes, "id"> { }
 
-class UOMMaster
-    extends Model<UOMMasterAttributes, UOMMasterCreationAttributes>
-    implements UOMMasterAttributes {
+class DepartmentMaster
+    extends Model<DepartmentMasterAttributes, DepartmentMasterCreationAttributes>
+    implements DepartmentMasterAttributes {
     public id!: number;
-    public uom_name!: string;
+    public department_name!: string;
     public subsidiary_id?: number | null;
     public CompanyId!: number;
-    public user_id!: number;
+    public user_id?: number | null;
     public isActive!: boolean;
-    public allow_decimals!: boolean;
     public readonly createdAt!: Date;
     public readonly updatedAt!: Date;
 
-    static validateUOMMaster(uom: UOMMasterAttributes) {
+    static validateDepartmentMaster(deptObj: DepartmentMasterAttributes) {
         const schema = Joi.object({
-            uom_name: Joi.string().min(2).max(100).required(),
+            department_name: Joi.string().min(1).max(200).required(),
             subsidiary_id: Joi.number().integer().positive().optional().allow(null),
             CompanyId: Joi.number().integer().positive().required(),
-            user_id: Joi.number().integer().positive().required(),
+            user_id: Joi.number().integer().positive().optional().allow(null),
             isActive: Joi.boolean().optional(),
-            allow_decimals: Joi.boolean().optional(),
         });
-        return schema.validate(uom);
+        return schema.validate(deptObj);
     }
 }
 
-UOMMaster.init(
+DepartmentMaster.init(
     {
         id: {
             type: DataTypes.INTEGER.UNSIGNED,
             autoIncrement: true,
             primaryKey: true,
         },
-        uom_name: {
-            type: DataTypes.STRING(100),
+        department_name: {
+            type: DataTypes.STRING(200),
             allowNull: false,
+        },
+        subsidiary_id: {
+            type: DataTypes.INTEGER.UNSIGNED,
+            allowNull: true,
+            references: {
+                model: "subsidiaries",
+                key: "id",
+            },
+            onUpdate: "CASCADE",
+            onDelete: "SET NULL",
         },
         CompanyId: {
             type: DataTypes.INTEGER.UNSIGNED,
@@ -69,19 +76,9 @@ UOMMaster.init(
         },
         user_id: {
             type: DataTypes.BIGINT,
-            allowNull: false,
-            references: {
-                model: User,
-                key: "id",
-            },
-            onUpdate: "CASCADE",
-            onDelete: "RESTRICT",
-        },
-        subsidiary_id: {
-            type: DataTypes.INTEGER.UNSIGNED,
             allowNull: true,
             references: {
-                model: SubsidiaryMaster,
+                model: User,
                 key: "id",
             },
             onUpdate: "CASCADE",
@@ -92,61 +89,36 @@ UOMMaster.init(
             allowNull: false,
             defaultValue: true,
         },
-        allow_decimals: {
-            type: DataTypes.BOOLEAN,
-            allowNull: false,
-            defaultValue: true,
-        },
     },
     {
-        tableName: "uom_masters",
+        tableName: "departments",
         sequelize,
         timestamps: true,
-        indexes: [
-            {
-                unique: true,
-                fields: ["uom_name", "CompanyId"],
-            },
-        ],
     }
 );
 
-// Associations
-UOMMaster.belongsTo(Company, {
+DepartmentMaster.belongsTo(Company, {
     foreignKey: "CompanyId",
     as: "company",
     onDelete: "CASCADE",
 });
 
-UOMMaster.belongsTo(User, {
+DepartmentMaster.belongsTo(User, {
     foreignKey: "user_id",
     as: "user",
-    onDelete: "RESTRICT",
+    onDelete: "SET NULL",
 });
 
-Company.hasMany(UOMMaster, {
-    foreignKey: "CompanyId",
-    as: "uoms",
-    onDelete: "CASCADE",
-});
-
-User.hasMany(UOMMaster, {
-    foreignKey: "user_id",
-    as: "uoms",
-    onDelete: "RESTRICT",
-});
-
-// Association to subsidiary (optional)
-UOMMaster.belongsTo(SubsidiaryMaster, {
+DepartmentMaster.belongsTo(SubsidiaryMaster, {
     foreignKey: "subsidiary_id",
     as: "subsidiary",
     onDelete: "SET NULL",
 });
 
-SubsidiaryMaster.hasMany(UOMMaster, {
-    foreignKey: "subsidiary_id",
-    as: "uoms",
-    onDelete: "SET NULL",
+Company.hasMany(DepartmentMaster, {
+    foreignKey: "CompanyId",
+    as: "departments",
+    onDelete: "CASCADE",
 });
 
-export default UOMMaster;
+export default DepartmentMaster;

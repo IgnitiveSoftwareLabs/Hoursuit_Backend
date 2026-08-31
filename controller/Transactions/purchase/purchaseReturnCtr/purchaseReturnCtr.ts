@@ -361,6 +361,11 @@ const PurchaseReturnController = {
                 throw new Error("Purchase return not found");
             }
 
+            if (existingReturn.status !== "DRAFT") {
+                res.status(StatusCodes.BAD_REQUEST);
+                throw new Error(`Only DRAFT Purchase Returns can be edited. Current status is ${existingReturn.status}.`);
+            }
+
             const returnDate = header.returnDate ? new Date(header.returnDate) : existingReturn.returnDate;
             const status = normalizePurchaseReturnStatus(header.status || existingReturn.status, existingReturn.status || "DRAFT");
 
@@ -576,6 +581,11 @@ const PurchaseReturnController = {
         if (!purchaseReturn) {
             res.status(StatusCodes.NOT_FOUND);
             throw new Error("Purchase return not found");
+        }
+
+        if (purchaseReturn.status !== "DRAFT") {
+            res.status(StatusCodes.BAD_REQUEST);
+            throw new Error(`Only DRAFT Purchase Returns can be deleted. Current status is ${purchaseReturn.status}.`);
         }
 
         await PurchaseReturnLine.destroy({ where: { returnHeaderId: purchaseReturn.id } });

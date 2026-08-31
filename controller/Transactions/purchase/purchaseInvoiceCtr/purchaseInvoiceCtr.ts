@@ -350,7 +350,7 @@ const PurchaseInvoiceController = {
                 {
                     model: VendorDetails,
                     as: "vendor",
-                    attributes: ["id", "vendor_name"],
+                    attributes: ["id", "company_name"],
                     required: false,
                 },
                 {
@@ -415,7 +415,7 @@ const PurchaseInvoiceController = {
                 {
                     model: VendorDetails,
                     as: "vendor",
-                    attributes: ["id", "vendor_name"],
+                    attributes: ["id", "company_name"],
                     required: false,
                 },
                 {

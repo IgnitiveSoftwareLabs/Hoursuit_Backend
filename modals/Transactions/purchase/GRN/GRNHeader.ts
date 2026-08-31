@@ -3,8 +3,9 @@ import Joi from "joi";
 
 import WarehouseMaster from "../../../masters/warehouse/warehouse";
 import GodownMaster from "../../../masters/godown/godown";
-import { PurchaseOrder } from "../purchaseOrder/index";
 import StackMaster from "../../../masters/stack/stack";
+import TransportationMode from "../../../masters/transportMode/transportMode";
+import { PurchaseOrder } from "../purchaseOrder/index";
 import sequelize from "../../../../dbconfig/dbconfig";
 import Company from "../../../company/company";
 import User from "../../../user/user";
@@ -13,12 +14,15 @@ interface GRNAttributes {
     id: number;
     grnNo: string;
     purchaseOrderId?: number | null;
-    warehouseId: number;
+    warehouseId?: number | null;
     godownId?: number | null;
     stackId?: number | null;
+    transportationModeId?: number | null;
     grnDate: Date;
     vehicleNo?: string | null;
     driverName?: string | null;
+    driverPhoneNo?: string | null;
+    memo?: string | null;
     status:
     | "DRAFT"
     | "RECEIVED"
@@ -41,9 +45,12 @@ interface GRNCreationAttributes
         | "warehouseId"
         | "godownId"
         | "stackId"
+        | "transportationModeId"
         | "grnDate"
         | "vehicleNo"
         | "driverName"
+        | "driverPhoneNo"
+        | "memo"
         | "remarks"
         | "user_id"
     > { }
@@ -54,12 +61,15 @@ class GRN
     public id!: number;
     public grnNo!: string;
     public purchaseOrderId?: number | null;
-    public warehouseId!: number;
+    public warehouseId?: number | null;
     public godownId?: number | null;
     public stackId?: number | null;
+    public transportationModeId?: number | null;
     public grnDate!: Date;
     public vehicleNo?: string | null;
     public driverName?: string | null;
+    public driverPhoneNo?: string | null;
+    public memo?: string | null;
     public status!:
         | "DRAFT"
         | "RECEIVED"
@@ -77,12 +87,15 @@ class GRN
         const schema = Joi.object({
             grnNo: Joi.string().max(100).required(),
             purchaseOrderId: Joi.number().integer().positive().optional().allow(null),
-            warehouseId: Joi.number().integer().positive().required(),
+            warehouseId: Joi.number().integer().positive().optional().allow(null),
             godownId: Joi.number().integer().positive().optional().allow(null),
             stackId: Joi.number().integer().positive().optional().allow(null),
+            transportationModeId: Joi.number().integer().positive().optional().allow(null),
             grnDate: Joi.date().required(),
             vehicleNo: Joi.string().max(100).optional().allow(null, ""),
             driverName: Joi.string().max(100).optional().allow(null, ""),
+            driverPhoneNo: Joi.string().max(100).optional().allow(null, ""),
+            memo: Joi.string().max(1000).optional().allow(null, ""),
             status: Joi.string().valid(
                 "DRAFT",
                 "RECEIVED",
@@ -122,7 +135,7 @@ GRN.init(
         },
         warehouseId: {
             type: DataTypes.INTEGER.UNSIGNED,
-            allowNull: false,
+            allowNull: true,
             references: {
                 model: WarehouseMaster,
                 key: "id",
@@ -144,6 +157,14 @@ GRN.init(
                 key: "id",
             },
         },
+        transportationModeId: {
+            type: DataTypes.INTEGER.UNSIGNED,
+            allowNull: true,
+            references: {
+                model: TransportationMode,
+                key: "id",
+            },
+        },
         grnDate: {
             type: DataTypes.DATE,
             allowNull: false,
@@ -154,6 +175,14 @@ GRN.init(
         },
         driverName: {
             type: DataTypes.STRING(100),
+            allowNull: true,
+        },
+        driverPhoneNo: {
+            type: DataTypes.STRING(100),
+            allowNull: true,
+        },
+        memo: {
+            type: DataTypes.TEXT,
             allowNull: true,
         },
         status: {
@@ -206,6 +235,9 @@ GRN.init(
             },
             {
                 fields: ["stackId"],
+            },
+            {
+                fields: ["transportationModeId"],
             },
             {
                 fields: ["CompanyId"],
@@ -267,6 +299,16 @@ GRN.belongsTo(StackMaster, {
 });
 StackMaster.hasMany(GRN, {
     foreignKey: "stackId",
+    as: "grns",
+});
+
+GRN.belongsTo(TransportationMode, {
+    foreignKey: "transportationModeId",
+    as: "transportationMode",
+    onDelete: "SET NULL",
+});
+TransportationMode.hasMany(GRN, {
+    foreignKey: "transportationModeId",
     as: "grns",
 });
 

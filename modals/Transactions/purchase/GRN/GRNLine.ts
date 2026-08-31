@@ -3,6 +3,7 @@ import Joi from "joi";
 
 import { PurchaseOrderLine } from "../purchaseOrder/index";
 import ItemMaster from "../../../masters/items/itemMaster";
+import CityMaster from "../../../masters/city/city";
 import sequelize from "../../../../dbconfig/dbconfig";
 import Company from "../../../company/company";
 import User from "../../../user/user";
@@ -13,12 +14,12 @@ interface GRNLineAttributes {
     grnHeaderId: number;
     purchaseOrderLineId?: number | null;
     itemId: number;
+    locationId?: number | null;
+    onHand?: number | null;
     orderedQty: number;
     receivedQty: number;
     acceptedQty: number;
     rejectedQty: number;
-    batchNo?: string | null;
-    serialNo?: string | null;
     manufacturingDate?: Date | null;
     expiryDate?: Date | null;
     qcRequired: boolean;
@@ -40,14 +41,14 @@ interface GRNLineCreationAttributes
         GRNLineAttributes,
         | "id"
         | "purchaseOrderLineId"
+        | "locationId"
+        | "onHand"
         | "orderedQty"
         | "receivedQty"
         | "acceptedQty"
         | "rejectedQty"
         | "qcRequired"
         | "status"
-        | "batchNo"
-        | "serialNo"
         | "manufacturingDate"
         | "expiryDate"
         | "remarks"
@@ -61,12 +62,12 @@ class GRNLine
     public grnHeaderId!: number;
     public purchaseOrderLineId?: number | null;
     public itemId!: number;
+    public locationId?: number | null;
+    public onHand?: number | null;
     public orderedQty!: number;
     public receivedQty!: number;
     public acceptedQty!: number;
     public rejectedQty!: number;
-    public batchNo?: string | null;
-    public serialNo?: string | null;
     public manufacturingDate?: Date | null;
     public expiryDate?: Date | null;
     public qcRequired!: boolean;
@@ -87,12 +88,12 @@ class GRNLine
             grnHeaderId: Joi.number().integer().positive().required(),
             purchaseOrderLineId: Joi.number().integer().positive().optional().allow(null),
             itemId: Joi.number().integer().positive().required(),
+            locationId: Joi.number().integer().positive().optional().allow(null),
+            onHand: Joi.number().optional().allow(null),
             orderedQty: Joi.number().positive().required(),
             receivedQty: Joi.number().positive().required(),
             acceptedQty: Joi.number().min(0).required(),
             rejectedQty: Joi.number().min(0).required(),
-            batchNo: Joi.string().max(100).optional().allow(null, ""),
-            serialNo: Joi.string().max(100).optional().allow(null, ""),
             manufacturingDate: Joi.date().optional().allow(null),
             expiryDate: Joi.date().optional().allow(null),
             qcRequired: Joi.boolean().optional().required(),
@@ -142,6 +143,19 @@ GRNLine.init(
                 key: "id",
             },
         },
+        locationId: {
+            type: DataTypes.INTEGER.UNSIGNED,
+            allowNull: true,
+            references: {
+                model: CityMaster,
+                key: "id",
+            },
+        },
+        onHand: {
+            type: DataTypes.DECIMAL(15, 4),
+            allowNull: true,
+            defaultValue: 0,
+        },
         orderedQty: {
             type: DataTypes.DECIMAL(15, 4),
             allowNull: false,
@@ -161,14 +175,6 @@ GRNLine.init(
             type: DataTypes.DECIMAL(15, 4),
             allowNull: false,
             defaultValue: 0,
-        },
-        batchNo: {
-            type: DataTypes.STRING(100),
-            allowNull: true,
-        },
-        serialNo: {
-            type: DataTypes.STRING(100),
-            allowNull: true,
         },
         manufacturingDate: {
             type: DataTypes.DATE,
@@ -227,6 +233,9 @@ GRNLine.init(
                 fields: ["itemId"],
             },
             {
+                fields: ["locationId"],
+            },
+            {
                 fields: ["status"],
             },
         ],
@@ -272,6 +281,15 @@ GRNLine.belongsTo(ItemMaster, {
 });
 ItemMaster.hasMany(GRNLine, {
     foreignKey: "itemId",
+    as: "grnLines",
+});
+GRNLine.belongsTo(CityMaster, {
+    foreignKey: "locationId",
+    as: "location",
+    onDelete: "SET NULL",
+});
+CityMaster.hasMany(GRNLine, {
+    foreignKey: "locationId",
     as: "grnLines",
 });
 

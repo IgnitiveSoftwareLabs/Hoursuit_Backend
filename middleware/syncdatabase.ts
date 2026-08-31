@@ -22,8 +22,9 @@ import PanAvailibility from "../modals/masters/panAvailibility/panAvailibility";
 import TransportationMode from "../modals/masters/transportMode/transportMode";
 import SubsidiaryMaster from "../modals/masters/subsidiaries/subsdiaryMaster";
 import ServiceType from "../modals/masters/serviceType/serviceTypeMaster";
-import VendorDetails from "../modals/masters/vendorDetails/vendorDetails";
+import VendorDetails, { VendorAddressBook, VendorSubsidiary } from "../modals/masters/vendorDetails/vendorDetails";
 import PaymentMethod from "../modals/masters/paymentMethod/paymentMethod";
+import PaymentTerm from "../modals/masters/paymentTerms/paymentTerm";
 import AccountTypeMaster from "../modals/platform/accountType/accountType";
 import WorkCategory from "../modals/masters/workCategory/workCatMaster";
 import CurrencyMaster from "../modals/masters/currency/currencyMaster";
@@ -86,6 +87,7 @@ async function syncdatabase() {
   await RegistationType.sync();
   await PanAvailibility.sync();
   await PaymentMethod.sync();
+  await PaymentTerm.sync();
   // await EmployeeMaster.sync();
   await MISTypeMaster.sync();
   await AccountTypeMaster.sync();
@@ -93,6 +95,8 @@ async function syncdatabase() {
   await ChartOfAccountMaster.sync();
   await ItemGroupMaster.sync();
   await VendorDetails.sync();
+  await VendorAddressBook.sync();
+  await VendorSubsidiary.sync();
   await CategoryMaster.sync();
   await WorkCategory.sync();
   await ItemMaster.sync();
