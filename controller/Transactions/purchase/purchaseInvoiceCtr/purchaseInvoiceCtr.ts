@@ -87,7 +87,29 @@ const PurchaseInvoiceController = {
             const status = "DRAFT";
 
             let invoiceNumber = String(header.invoiceNumber || header.vendorInvoiceNumber || "").trim();
-            if (!invoiceNumber) {
+            if (invoiceNumber) {
+                let exists = await PurchaseInvoiceHeader.findOne({ where: { invoiceNumber }, transaction });
+                if (exists) {
+                    const match = invoiceNumber.match(/^([A-Za-z]+-\d{4}-)(\d+)$/) || invoiceNumber.match(/^([A-Za-z]+-)(\d+)$/);
+                    if (match) {
+                        const prefix = match[1];
+                        let seq = parseInt(match[2], 10);
+                        while (exists) {
+                            seq++;
+                            invoiceNumber = `${prefix}${String(seq).padStart(4, "0")}`;
+                            exists = await PurchaseInvoiceHeader.findOne({ where: { invoiceNumber }, transaction });
+                        }
+                    } else {
+                        let counter = 1;
+                        let candidate = `${invoiceNumber}-${counter}`;
+                        while (await PurchaseInvoiceHeader.findOne({ where: { invoiceNumber: candidate }, transaction })) {
+                            counter++;
+                            candidate = `${invoiceNumber}-${counter}`;
+                        }
+                        invoiceNumber = candidate;
+                    }
+                }
+            } else {
                 const count = await PurchaseInvoiceHeader.count({ where: { companyId }, transaction });
                 let counter = count + 1;
                 let autoNo = `VB-${new Date().getFullYear()}-${String(counter).padStart(4, "0")}`;
@@ -98,15 +120,12 @@ const PurchaseInvoiceController = {
                     exists = await PurchaseInvoiceHeader.findOne({ where: { invoiceNumber: autoNo }, transaction });
                 }
                 invoiceNumber = autoNo;
-            } else {
-                const exists = await PurchaseInvoiceHeader.findOne({ where: { invoiceNumber }, transaction });
-                if (exists) {
-                    res.status(StatusCodes.BAD_REQUEST);
-                    throw new Error(`Vendor Bill with invoice number '${invoiceNumber}' already exists. Please generate a new bill number.`);
-                }
             }
 
             let vendorInvoiceNumber = String(header.vendorInvoiceNumber || invoiceNumber).trim();
+            if (header.vendorInvoiceNumber && header.vendorInvoiceNumber !== invoiceNumber && String(header.vendorInvoiceNumber).startsWith("VB-")) {
+                vendorInvoiceNumber = invoiceNumber;
+            }
 
             const invoiceType = String(header.invoiceType || "REGULAR").trim();
 
