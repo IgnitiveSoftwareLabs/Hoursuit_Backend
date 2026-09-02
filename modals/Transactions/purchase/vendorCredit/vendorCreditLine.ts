@@ -11,6 +11,10 @@ export interface VendorCreditLineAttributes {
     itemId: number;
     creditQty: number;
     unitPrice: number;
+    discountPercent?: number | null;
+    discountAmount?: number | null;
+    taxPercent?: number | null;
+    taxAmount?: number | null;
     totalAmount: number;
     remarks?: string | null;
     createdAt?: Date;
@@ -20,7 +24,15 @@ export interface VendorCreditLineAttributes {
 export interface VendorCreditLineCreationAttributes
     extends Optional<
         VendorCreditLineAttributes,
-        "id" | "purchaseReturnLineId" | "remarks" | "createdAt" | "updatedAt"
+        | "id"
+        | "purchaseReturnLineId"
+        | "discountPercent"
+        | "discountAmount"
+        | "taxPercent"
+        | "taxAmount"
+        | "remarks"
+        | "createdAt"
+        | "updatedAt"
     > { }
 
 export class VendorCreditLine
@@ -35,6 +47,10 @@ export class VendorCreditLine
     public itemId!: number;
     public creditQty!: number;
     public unitPrice!: number;
+    public discountPercent!: number | null;
+    public discountAmount!: number | null;
+    public taxPercent!: number | null;
+    public taxAmount!: number | null;
     public totalAmount!: number;
     public remarks!: string | null;
     public readonly createdAt!: Date;
@@ -67,6 +83,26 @@ VendorCreditLine.init(
         unitPrice: {
             type: DataTypes.DECIMAL(15, 4),
             allowNull: false,
+            defaultValue: 0,
+        },
+        discountPercent: {
+            type: DataTypes.DECIMAL(10, 2),
+            allowNull: true,
+            defaultValue: 0,
+        },
+        discountAmount: {
+            type: DataTypes.DECIMAL(18, 2),
+            allowNull: true,
+            defaultValue: 0,
+        },
+        taxPercent: {
+            type: DataTypes.DECIMAL(10, 2),
+            allowNull: true,
+            defaultValue: 0,
+        },
+        taxAmount: {
+            type: DataTypes.DECIMAL(18, 2),
+            allowNull: true,
             defaultValue: 0,
         },
         totalAmount: {

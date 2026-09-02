@@ -104,8 +104,12 @@ const PurchaseReturnController = {
                 throw new Error("Valid returnDate is required");
             }
 
-            const createdHeader = await PurchaseReturnHeader.create(headerPayload, { transaction });
-            const createdLineItems: any[] = [];
+            let totalSubtotal = 0;
+            let totalDiscount = 0;
+            let totalTax = 0;
+            let totalAmount = 0;
+
+            const preparedLines: any[] = [];
 
             for (let index = 0; index < lineItems.length; index++) {
                 const lineItem = lineItems[index];
@@ -143,8 +147,43 @@ const PurchaseReturnController = {
                     }
                 }
 
-                const linePayload: any = {
-                    returnHeaderId: createdHeader.id,
+                if (!lineItem.itemId) {
+                    res.status(StatusCodes.BAD_REQUEST);
+                    throw new Error(`itemId is required in line item ${index + 1}`);
+                }
+                if (!returnQty || returnQty <= 0) {
+                    res.status(StatusCodes.BAD_REQUEST);
+                    throw new Error(`returnQty must be greater than zero in line item ${index + 1}`);
+                }
+                if (unitPrice < 0) {
+                    res.status(StatusCodes.BAD_REQUEST);
+                    throw new Error(`unitPrice cannot be negative in line item ${index + 1}`);
+                }
+
+                const grossLineAmount = Number((returnQty * unitPrice).toFixed(2));
+                const discountPercent = lineItem.discountPercent !== undefined && lineItem.discountPercent !== null ? Number(lineItem.discountPercent) : 0;
+                let discountAmount = lineItem.discountAmount !== undefined && lineItem.discountAmount !== null ? Number(lineItem.discountAmount) : 0;
+                if (discountPercent > 0 && discountAmount === 0) {
+                    discountAmount = Number(((grossLineAmount * discountPercent) / 100).toFixed(2));
+                }
+
+                const taxableLineAmount = Math.max(0, Number((grossLineAmount - discountAmount).toFixed(2)));
+                const taxPercent = lineItem.taxPercent !== undefined && lineItem.taxPercent !== null ? Number(lineItem.taxPercent) : 0;
+                let taxAmount = lineItem.taxAmount !== undefined && lineItem.taxAmount !== null ? Number(lineItem.taxAmount) : 0;
+                if (taxPercent > 0 && taxAmount === 0) {
+                    taxAmount = Number(((taxableLineAmount * taxPercent) / 100).toFixed(2));
+                }
+
+                const lineTotal = lineItem.lineTotal !== undefined && lineItem.lineTotal !== null && Number(lineItem.lineTotal) > 0
+                    ? Number(Number(lineItem.lineTotal).toFixed(2))
+                    : Number((taxableLineAmount + taxAmount).toFixed(2));
+
+                totalSubtotal += grossLineAmount;
+                totalDiscount += discountAmount;
+                totalTax += taxAmount;
+                totalAmount += lineTotal;
+
+                preparedLines.push({
                     grnLineId: resolvedGrnLineId,
                     itemId: Number(lineItem.itemId),
                     batchNo: lineItem.batchNo || null,
@@ -152,24 +191,29 @@ const PurchaseReturnController = {
                     rejectedQty,
                     damagedQty,
                     unitPrice,
+                    discountPercent,
+                    discountAmount,
+                    taxPercent,
+                    taxAmount,
+                    lineTotal,
                     reason: lineItem.reason || null,
                     remarks: lineItem.remarks || null,
-                };
+                });
+            }
 
-                if (!linePayload.itemId) {
-                    res.status(StatusCodes.BAD_REQUEST);
-                    throw new Error(`itemId is required in line item ${index + 1}`);
-                }
-                if (!linePayload.returnQty || linePayload.returnQty <= 0) {
-                    res.status(StatusCodes.BAD_REQUEST);
-                    throw new Error(`returnQty must be greater than zero in line item ${index + 1}`);
-                }
-                if (linePayload.unitPrice < 0) {
-                    res.status(StatusCodes.BAD_REQUEST);
-                    throw new Error(`unitPrice cannot be negative in line item ${index + 1}`);
-                }
+            headerPayload.subtotal = Number(totalSubtotal.toFixed(2));
+            headerPayload.discountAmount = Number(totalDiscount.toFixed(2));
+            headerPayload.taxAmount = Number(totalTax.toFixed(2));
+            headerPayload.totalAmount = Number(totalAmount.toFixed(2));
 
-                const createdLine = await PurchaseReturnLine.create(linePayload, { transaction });
+            const createdHeader = await PurchaseReturnHeader.create(headerPayload, { transaction });
+            const createdLineItems: any[] = [];
+
+            for (const linePayload of preparedLines) {
+                const createdLine = await PurchaseReturnLine.create({
+                    ...linePayload,
+                    returnHeaderId: createdHeader.id,
+                }, { transaction });
                 createdLineItems.push(createdLine);
             }
 
@@ -396,10 +440,12 @@ const PurchaseReturnController = {
                 throw new Error("Valid returnDate is required");
             }
 
-            await existingReturn.update(headerPayload, { transaction });
-            await PurchaseReturnLine.destroy({ where: { returnHeaderId: existingReturn.id }, transaction });
+            let totalSubtotal = 0;
+            let totalDiscount = 0;
+            let totalTax = 0;
+            let totalAmount = 0;
 
-            const updatedLineItems: any[] = [];
+            const preparedUpdatedLines: any[] = [];
             for (let index = 0; index < lineItems.length; index++) {
                 const lineItem = lineItems[index];
                 const returnQty = Number(lineItem.returnQty);
@@ -438,7 +484,43 @@ const PurchaseReturnController = {
                     }
                 }
 
-                const linePayload: any = {
+                if (!lineItem.itemId) {
+                    res.status(StatusCodes.BAD_REQUEST);
+                    throw new Error(`itemId is required in line item ${index + 1}`);
+                }
+                if (!returnQty || returnQty <= 0) {
+                    res.status(StatusCodes.BAD_REQUEST);
+                    throw new Error(`returnQty must be greater than zero in line item ${index + 1}`);
+                }
+                if (unitPrice < 0) {
+                    res.status(StatusCodes.BAD_REQUEST);
+                    throw new Error(`unitPrice cannot be negative in line item ${index + 1}`);
+                }
+
+                const grossLineAmount = Number((returnQty * unitPrice).toFixed(2));
+                const discountPercent = lineItem.discountPercent !== undefined && lineItem.discountPercent !== null ? Number(lineItem.discountPercent) : 0;
+                let discountAmount = lineItem.discountAmount !== undefined && lineItem.discountAmount !== null ? Number(lineItem.discountAmount) : 0;
+                if (discountPercent > 0 && discountAmount === 0) {
+                    discountAmount = Number(((grossLineAmount * discountPercent) / 100).toFixed(2));
+                }
+
+                const taxableLineAmount = Math.max(0, Number((grossLineAmount - discountAmount).toFixed(2)));
+                const taxPercent = lineItem.taxPercent !== undefined && lineItem.taxPercent !== null ? Number(lineItem.taxPercent) : 0;
+                let taxAmount = lineItem.taxAmount !== undefined && lineItem.taxAmount !== null ? Number(lineItem.taxAmount) : 0;
+                if (taxPercent > 0 && taxAmount === 0) {
+                    taxAmount = Number(((taxableLineAmount * taxPercent) / 100).toFixed(2));
+                }
+
+                const lineTotal = lineItem.lineTotal !== undefined && lineItem.lineTotal !== null && Number(lineItem.lineTotal) > 0
+                    ? Number(Number(lineItem.lineTotal).toFixed(2))
+                    : Number((taxableLineAmount + taxAmount).toFixed(2));
+
+                totalSubtotal += grossLineAmount;
+                totalDiscount += discountAmount;
+                totalTax += taxAmount;
+                totalAmount += lineTotal;
+
+                preparedUpdatedLines.push({
                     returnHeaderId: existingReturn.id,
                     grnLineId: resolvedGrnLineId,
                     itemId: Number(lineItem.itemId),
@@ -447,23 +529,26 @@ const PurchaseReturnController = {
                     rejectedQty,
                     damagedQty,
                     unitPrice,
+                    discountPercent,
+                    discountAmount,
+                    taxPercent,
+                    taxAmount,
+                    lineTotal,
                     reason: lineItem.reason || null,
                     remarks: lineItem.remarks || null,
-                };
+                });
+            }
 
-                if (!linePayload.itemId) {
-                    res.status(StatusCodes.BAD_REQUEST);
-                    throw new Error(`itemId is required in line item ${index + 1}`);
-                }
-                if (!linePayload.returnQty || linePayload.returnQty <= 0) {
-                    res.status(StatusCodes.BAD_REQUEST);
-                    throw new Error(`returnQty must be greater than zero in line item ${index + 1}`);
-                }
-                if (linePayload.unitPrice < 0) {
-                    res.status(StatusCodes.BAD_REQUEST);
-                    throw new Error(`unitPrice cannot be negative in line item ${index + 1}`);
-                }
+            headerPayload.subtotal = Number(totalSubtotal.toFixed(2));
+            headerPayload.discountAmount = Number(totalDiscount.toFixed(2));
+            headerPayload.taxAmount = Number(totalTax.toFixed(2));
+            headerPayload.totalAmount = Number(totalAmount.toFixed(2));
 
+            await existingReturn.update(headerPayload, { transaction });
+            await PurchaseReturnLine.destroy({ where: { returnHeaderId: existingReturn.id }, transaction });
+
+            const updatedLineItems: any[] = [];
+            for (const linePayload of preparedUpdatedLines) {
                 const createdLine = await PurchaseReturnLine.create(linePayload, { transaction });
                 updatedLineItems.push(createdLine);
             }

@@ -19,6 +19,7 @@ export interface PurchasePaymentHeaderAttributes {
     vendorId: number;
     paymentMethodId?: number | null;
     bankAccountId?: number | null;
+    apAccountId?: number | null;
     totalAmount: number;
     currency?: string;
     exchangeRate?: number;
@@ -37,6 +38,7 @@ export interface PurchasePaymentHeaderCreationAttributes
         | "purchaseInvoiceHeaderId"
         | "paymentMethodId"
         | "bankAccountId"
+        | "apAccountId"
         | "currency"
         | "exchangeRate"
         | "referenceNo"
@@ -60,6 +62,7 @@ class PurchasePaymentHeader
     public vendorId!: number;
     public paymentMethodId!: number | null;
     public bankAccountId!: number | null;
+    public apAccountId!: number | null;
     public totalAmount!: number;
     public currency!: string;
     public exchangeRate!: number;
@@ -79,6 +82,7 @@ class PurchasePaymentHeader
             vendorId: Joi.number().integer().positive().required(),
             paymentMethodId: Joi.number().integer().positive().optional().allow(null),
             bankAccountId: Joi.number().integer().positive().optional().allow(null),
+            apAccountId: Joi.number().integer().positive().optional().allow(null),
             totalAmount: Joi.number().positive().required(),
             currency: Joi.string().max(10).optional(),
             exchangeRate: Joi.number().positive().optional(),
@@ -127,6 +131,11 @@ PurchasePaymentHeader.init(
         bankAccountId: {
             type: DataTypes.INTEGER,
             allowNull: true,
+        },
+        apAccountId: {
+            type: DataTypes.INTEGER,
+            allowNull: true,
+            field: "ap_account_id",
         },
         totalAmount: {
             type: DataTypes.DECIMAL(18, 2),
@@ -189,5 +198,6 @@ VendorDetails.hasMany(PurchasePaymentHeader, { foreignKey: "vendorId", as: "purc
 
 PurchasePaymentHeader.belongsTo(PaymentMethod, { foreignKey: "paymentMethodId", as: "paymentMethod", onDelete: "SET NULL" });
 PurchasePaymentHeader.belongsTo(ChartOfAccountMaster, { foreignKey: "bankAccountId", as: "bankAccount", onDelete: "SET NULL" });
+PurchasePaymentHeader.belongsTo(ChartOfAccountMaster, { foreignKey: "apAccountId", as: "apAccount", onDelete: "SET NULL" });
 
 export default PurchasePaymentHeader;

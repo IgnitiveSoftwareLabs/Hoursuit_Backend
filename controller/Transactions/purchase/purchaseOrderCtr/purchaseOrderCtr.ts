@@ -4,15 +4,24 @@ import asyncHandler from "express-async-handler";
 import { StatusCodes } from "http-status-codes";
 import { Op } from "sequelize";
 
+import PurchaseInvoiceHeader from "../../../../modals/Transactions/purchase/purchaseInvoice/purchaseInvoiceHeader";
+import ChartOfAccountMaster from "../../../../modals/masters/chartOfAccount/chartOfAccount";
+import VendorAddressBook from "../../../../modals/masters/vendorDetails/VendorAddressBook";
 import TransportationMode from "../../../../modals/masters/transportMode/transportMode";
 import SubsidiaryMaster from "../../../../modals/masters/subsidiaries/subsdiaryMaster";
+import DepartmentMaster from "../../../../modals/masters/department/departmentMaster";
 import WorkCategory from "../../../../modals/masters/workCategory/workCatMaster";
+import CurrencyMaster from "../../../../modals/masters/currency/currencyMaster";
 import Vendor from "../../../../modals/masters/vendorDetails/vendorDetails";
 import HSNSACMaster from "../../../../modals/masters/HSN-SAC/HSNSACMaster";
+import { normalizePurchaseOrderStatus } from "../../../../utils/p2pStatus";
 import { findCompanyForUser } from "../../../../utils/findCompanyForUser";
 import Warehouse from "../../../../modals/masters/warehouse/warehouse";
+import ClassMaster from "../../../../modals/masters/class/classMaster";
 import ItemMaster from "../../../../modals/masters/items/itemMaster";
 import Customer from "../../../../modals/masters/customer/customer";
+import { GRN } from "../../../../modals/Transactions/purchase/GRN";
+import { InventoryService } from "../../../../utils/inventoryService";
 import { CustomRequest } from "../../../../typeRequest/customReq";
 import UOMMaster from "../../../../modals/masters/UOM/UOMMaster";
 import {
@@ -23,13 +32,7 @@ import CityMaster from "../../../../modals/masters/city/city";
 import Godown from "../../../../modals/masters/godown/godown";
 import Stack from "../../../../modals/masters/stack/stack";
 import sequelize from "../../../../dbconfig/dbconfig";
-import { normalizePurchaseOrderStatus } from "../../../../utils/p2pStatus";
 
-import ChartOfAccountMaster from "../../../../modals/masters/chartOfAccount/chartOfAccount";
-import CurrencyMaster from "../../../../modals/masters/currency/currencyMaster";
-import VendorAddressBook from "../../../../modals/masters/vendorDetails/VendorAddressBook";
-import ClassMaster from "../../../../modals/masters/class/classMaster";
-import DepartmentMaster from "../../../../modals/masters/department/departmentMaster";
 
 const normalizeOptionalId = (value: unknown) => {
     if (value === null || value === "" || value === undefined || value === "null" || value === "undefined") {
@@ -153,11 +156,24 @@ const PurchaseOrderController = {
                 const lineItem = lineItems[index];
                 const quantity = Number(lineItem.quantity);
                 const rate = lineItem.rate !== undefined && lineItem.rate !== "" ? Number(lineItem.rate) : null;
+                const discountPercent = lineItem.discount_percent !== undefined && lineItem.discount_percent !== ""
+                    ? Number(lineItem.discount_percent)
+                    : (lineItem.discountPercent !== undefined && lineItem.discountPercent !== "" ? Number(lineItem.discountPercent) : 0);
+
                 const taxRate =
                     lineItem.tax_rate !== undefined && lineItem.tax_rate !== ""
                         ? Number(lineItem.tax_rate)
                         : 0;
-                const taxableAmount = rate !== null ? quantity * rate : 0;
+
+                const grossAmount = rate !== null ? quantity * rate : 0;
+                const discountAmount = lineItem.discount_amount !== undefined && lineItem.discount_amount !== ""
+                    ? Number(lineItem.discount_amount)
+                    : Number(((grossAmount * discountPercent) / 100).toFixed(2));
+
+                const taxableAmount = grossAmount - discountAmount;
+                const subtotal = lineItem.subtotal !== undefined && lineItem.subtotal !== ""
+                    ? Number(lineItem.subtotal)
+                    : Number(taxableAmount.toFixed(2));
                 const amount =
                     lineItem.amount !== undefined && lineItem.amount !== ""
                         ? Number(lineItem.amount)
@@ -178,6 +194,9 @@ const PurchaseOrderController = {
                     uom_id: Number(lineItem.uom_id),
                     rate,
                     amount,
+                    discount_percent: discountPercent,
+                    discount_amount: discountAmount,
+                    subtotal,
                     indian_tax_nature: lineItem.indian_tax_nature || lineItem.ndian_tax_nature || null,
                     use_rate_calculation:
                         lineItem.use_rate_calculation !== undefined
@@ -461,7 +480,7 @@ const PurchaseOrderController = {
                     required: false,
                     include: [
                         itemIncludeConfig,
-                        { model: HSNSACMaster, as: "hsnSac", attributes: ["id", "code"] },
+                        { model: HSNSACMaster, as: "hsnSac", attributes: ["id", "code", "taxPercentage"] },
                         { model: UOMMaster, as: "uom", attributes: ["id", "uom_name"] },
                         {
                             model: WorkCategory,
@@ -478,10 +497,37 @@ const PurchaseOrderController = {
             throw new Error("Purchase order not found");
         }
 
+        let poResult: any = purchaseOrder.toJSON ? purchaseOrder.toJSON() : purchaseOrder;
+        try {
+            const summary = await InventoryService.getPurchaseOrderReceiptSummary(Number(id), CompanyId);
+            poResult.receiptSummary = {
+                totalOrderedQty: summary.totalOrderedQty,
+                totalReceivedQty: summary.totalReceivedQty,
+                totalRemainingQty: summary.totalRemainingQty,
+                isFullyReceived: summary.isFullyReceived,
+            };
+
+            if (Array.isArray(poResult.purchaseOrderLines)) {
+                poResult.purchaseOrderLines = poResult.purchaseOrderLines.map((line: any) => {
+                    const lineSum = summary.lineSummaries.find((s: any) => Number(s.purchaseOrderLineId) === Number(line.id));
+                    return {
+                        ...line,
+                        receivedQuantity: lineSum?.previouslyReceivedQty ?? 0,
+                        acceptedQuantity: lineSum?.previouslyAcceptedQty ?? 0,
+                        rejectedQuantity: lineSum?.previouslyRejectedQty ?? 0,
+                        remainingQuantity: lineSum?.remainingQty ?? Number(line.quantity || 0),
+                        isFullyReceived: lineSum?.isFullyReceived ?? false,
+                    };
+                });
+            }
+        } catch (e) {
+            console.error("Error calculating PO receipt summary:", e);
+        }
+
         res.status(StatusCodes.OK).json({
             message: "Purchase order fetched successfully",
             success: true,
-            result: purchaseOrder,
+            result: poResult,
         });
     }),
 
@@ -598,11 +644,24 @@ const PurchaseOrderController = {
             for (const lineItem of lineItems) {
                 const quantity = Number(lineItem.quantity);
                 const rate = lineItem.rate !== undefined && lineItem.rate !== "" ? Number(lineItem.rate) : null;
+                const discountPercent = lineItem.discount_percent !== undefined && lineItem.discount_percent !== ""
+                    ? Number(lineItem.discount_percent)
+                    : (lineItem.discountPercent !== undefined && lineItem.discountPercent !== "" ? Number(lineItem.discountPercent) : 0);
+
                 const taxRate =
                     lineItem.tax_rate !== undefined && lineItem.tax_rate !== ""
                         ? Number(lineItem.tax_rate)
                         : 0;
-                const taxableAmount = rate !== null ? quantity * rate : 0;
+
+                const grossAmount = rate !== null ? quantity * rate : 0;
+                const discountAmount = lineItem.discount_amount !== undefined && lineItem.discount_amount !== ""
+                    ? Number(lineItem.discount_amount)
+                    : Number(((grossAmount * discountPercent) / 100).toFixed(2));
+
+                const taxableAmount = grossAmount - discountAmount;
+                const subtotal = lineItem.subtotal !== undefined && lineItem.subtotal !== ""
+                    ? Number(lineItem.subtotal)
+                    : Number(taxableAmount.toFixed(2));
                 const amount =
                     lineItem.amount !== undefined && lineItem.amount !== ""
                         ? Number(lineItem.amount)
@@ -624,6 +683,9 @@ const PurchaseOrderController = {
                     uom_id: Number(lineItem.uom_id),
                     rate,
                     amount,
+                    discount_percent: discountPercent,
+                    discount_amount: discountAmount,
+                    subtotal,
                     indian_tax_nature: lineItem.indian_tax_nature || lineItem.ndian_tax_nature || null,
                     use_rate_calculation:
                         lineItem.use_rate_calculation !== undefined
@@ -745,9 +807,28 @@ const PurchaseOrderController = {
             throw new Error("Purchase order not found");
         }
 
-        if (String(purchaseOrder.status || "").toUpperCase() !== "DRAFT") {
+        // Check if GRN header exists for this PO
+        const linkedGRN = await GRN.findOne({
+            where: {
+                purchaseOrderId: purchaseOrder.id
+            } as any
+        });
+
+        if (linkedGRN) {
             res.status(StatusCodes.BAD_REQUEST);
-            throw new Error("Cannot delete Purchase Order. Only DRAFT Purchase Orders can be deleted.");
+            throw new Error("Cannot delete Purchase Order because a Goods Receipt Note (GRN) has already been created against it.");
+        }
+
+        // Check if Purchase Invoice header exists for this PO
+        const linkedInvoice = await PurchaseInvoiceHeader.findOne({
+            where: {
+                poHeaderId: purchaseOrder.id
+            } as any
+        });
+
+        if (linkedInvoice) {
+            res.status(StatusCodes.BAD_REQUEST);
+            throw new Error("Cannot delete Purchase Order because a Vendor Bill has already been created against it.");
         }
 
         // Delete line items first
@@ -894,7 +975,7 @@ const PurchaseOrderController = {
                         as: "item",
                         attributes: ["id", "item_code", "item_name", "item_desc"],
                     },
-                    { model: HSNSACMaster, as: "hsnSac", attributes: ["id", "code"] },
+                    { model: HSNSACMaster, as: "hsnSac", attributes: ["id", "code", "taxPercentage"] },
                     { model: UOMMaster, as: "uom", attributes: ["id", "uom_name"] },
                     {
                         model: WorkCategory,
@@ -918,7 +999,7 @@ const PurchaseOrderController = {
                         as: "item",
                         attributes: ["id", "item_code", "item_name", "item_desc"],
                     },
-                    { model: HSNSACMaster, as: "hsnSac", attributes: ["id", "code"] },
+                    { model: HSNSACMaster, as: "hsnSac", attributes: ["id", "code", "taxPercentage"] },
                     { model: UOMMaster, as: "uom", attributes: ["id", "uom_name"] },
                 ],
             });

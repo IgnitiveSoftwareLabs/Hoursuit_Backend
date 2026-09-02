@@ -100,6 +100,7 @@ const PurchasePaymentController = {
                 vendorId: Number(header.vendorId),
                 paymentMethodId: normalizeOptionalId(header.paymentMethodId),
                 bankAccountId: normalizeOptionalId(header.bankAccountId),
+                apAccountId: normalizeOptionalId(header.apAccountId ?? header.ap_account_id),
                 totalAmount,
                 currency: header.currency || "INR",
                 exchangeRate: header.exchangeRate !== undefined && header.exchangeRate !== ""
@@ -223,6 +224,11 @@ const PurchasePaymentController = {
                     required: false,
                 },
                 {
+                    model: ChartOfAccountMaster,
+                    as: "apAccount",
+                    required: false,
+                },
+                {
                     model: PurchasePaymentLine,
                     as: "paymentLines",
                     required: false,
@@ -278,6 +284,11 @@ const PurchasePaymentController = {
                 {
                     model: ChartOfAccountMaster,
                     as: "bankAccount",
+                    required: false,
+                },
+                {
+                    model: ChartOfAccountMaster,
+                    as: "apAccount",
                     required: false,
                 },
                 {
@@ -403,6 +414,7 @@ const PurchasePaymentController = {
                 vendorId: Number(header.vendorId || existingPayment.vendorId),
                 paymentMethodId: normalizeOptionalId(header.paymentMethodId),
                 bankAccountId: normalizeOptionalId(header.bankAccountId),
+                apAccountId: normalizeOptionalId(header.apAccountId ?? header.ap_account_id ?? existingPayment.apAccountId),
                 totalAmount,
                 currency: header.currency || existingPayment.currency,
                 exchangeRate: header.exchangeRate !== undefined && header.exchangeRate !== "" ? Number(header.exchangeRate) : existingPayment.exchangeRate,

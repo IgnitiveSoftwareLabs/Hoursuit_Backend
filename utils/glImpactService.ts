@@ -10,8 +10,7 @@ import PurchaseReturnFulfillmentLine from "../modals/Transactions/purchase/purch
 import VendorCreditHeader from "../modals/Transactions/purchase/vendorCredit/vendorCreditHeader";
 import VendorCreditLine from "../modals/Transactions/purchase/vendorCredit/vendorCreditLine";
 import PurchaseOrderLine from "../modals/Transactions/purchase/purchaseOrder/purchaseOrderLine";
-import GRNLine from "../modals/Transactions/purchase/GRN/GRNLine";
-import GRN from "../modals/Transactions/purchase/GRN/GRNHeader";
+import { GRN, GRNLine } from "../modals/Transactions/purchase/GRN";
 import ItemMaster from "../modals/masters/items/itemMaster";
 import ChartOfAccountMaster from "../modals/masters/chartOfAccount/chartOfAccount";
 
@@ -168,6 +167,26 @@ const resolveAPAccount = async (
 ): Promise<number> => {
   if (explicitId) return explicitId;
 
+  // 1. Search by exact or close account_name (highest priority)
+  const namedAccount = await ChartOfAccountMaster.findOne({
+    where: {
+      CompanyId: companyId,
+      isActive: true,
+      [Op.or]: [
+        { account_name: { [Op.like]: "%Accounts Payable%" } },
+        { account_name: { [Op.like]: "%Sundry Creditors%" } },
+        { account_name: { [Op.like]: "%Trade Creditors%" } },
+        { account_name: { [Op.like]: "%Payable%" } },
+        { account_name: { [Op.like]: "%Vendor%" } },
+        { account_name: { [Op.like]: "%Creditor%" } },
+      ],
+    },
+    transaction,
+  });
+
+  if (namedAccount) return namedAccount.id;
+
+  // 2. Search by accountType
   const apAccount = await ChartOfAccountMaster.findOne({
     where: { CompanyId: companyId, isActive: true },
     include: [
@@ -188,21 +207,6 @@ const resolveAPAccount = async (
   });
 
   if (apAccount) return apAccount.id;
-
-  const namedAccount = await ChartOfAccountMaster.findOne({
-    where: {
-      CompanyId: companyId,
-      isActive: true,
-      [Op.or]: [
-        { account_name: { [Op.like]: "%Payable%" } },
-        { account_name: { [Op.like]: "%Vendor%" } },
-        { account_name: { [Op.like]: "%Creditor%" } },
-      ],
-    },
-    transaction,
-  });
-
-  if (namedAccount) return namedAccount.id;
 
   const fallback = await ChartOfAccountMaster.findOne({
     where: { CompanyId: companyId, isActive: true },
@@ -357,13 +361,119 @@ const resolveOtherChargesExpenseAccount = async (
   throw new Error(`No Expense account found for company ID ${companyId} to resolve Other Charges Account.`);
 };
 
+/**
+ * Helper function to dynamically resolve Input Tax (GST) Account
+ */
+const resolveInputTaxAccount = async (
+  companyId: number,
+  explicitId?: number,
+  transaction?: Transaction
+): Promise<number> => {
+  if (explicitId) return explicitId;
+
+  const namedAccount = await ChartOfAccountMaster.findOne({
+    where: {
+      CompanyId: companyId,
+      isActive: true,
+      [Op.or]: [
+        { account_name: { [Op.like]: "%Input Tax%" } },
+        { account_name: { [Op.like]: "%Input GST%" } },
+        { account_name: { [Op.like]: "%Duties & Taxes%" } },
+        { account_name: { [Op.like]: "%GST%" } },
+        { account_name: { [Op.like]: "%Tax%" } },
+      ],
+    },
+    transaction,
+  });
+
+  if (namedAccount) return namedAccount.id;
+
+  const typeAccount = await ChartOfAccountMaster.findOne({
+    where: { CompanyId: companyId, isActive: true },
+    include: [
+      {
+        association: "accountType",
+        where: {
+          [Op.or]: [
+            { account_type_name: { [Op.like]: "%Tax%" } },
+            { account_type_name: { [Op.like]: "%Duty%" } },
+            { account_type_name: { [Op.like]: "%Duties%" } },
+            { account_type_name: { [Op.like]: "%GST%" } },
+          ],
+        },
+      },
+    ],
+    transaction,
+  });
+
+  if (typeAccount) return typeAccount.id;
+
+  const fallback = await ChartOfAccountMaster.findOne({
+    where: { CompanyId: companyId, isActive: true },
+    transaction,
+  });
+  return fallback?.id || 1;
+};
+
+/**
+ * Helper function to dynamically resolve Purchase Discount / Discount Received Account
+ */
+const resolvePurchaseDiscountAccount = async (
+  companyId: number,
+  explicitId?: number,
+  transaction?: Transaction
+): Promise<number> => {
+  if (explicitId) return explicitId;
+
+  const namedAccount = await ChartOfAccountMaster.findOne({
+    where: {
+      CompanyId: companyId,
+      isActive: true,
+      [Op.or]: [
+        { account_name: { [Op.like]: "%Discount Received%" } },
+        { account_name: { [Op.like]: "%Purchase Discount%" } },
+        { account_name: { [Op.like]: "%Discount%" } },
+      ],
+    },
+    transaction,
+  });
+
+  if (namedAccount) return namedAccount.id;
+
+  const typeAccount = await ChartOfAccountMaster.findOne({
+    where: { CompanyId: companyId, isActive: true },
+    include: [
+      {
+        association: "accountType",
+        where: {
+          [Op.or]: [
+            { account_type_name: { [Op.like]: "%Discount%" } },
+            { account_type_name: { [Op.like]: "%Income%" } },
+          ],
+        },
+      },
+    ],
+    transaction,
+  });
+
+  if (typeAccount) return typeAccount.id;
+
+  const fallback = await ChartOfAccountMaster.findOne({
+    where: { CompanyId: companyId, isActive: true },
+    transaction,
+  });
+  return fallback?.id || 1;
+};
+
 export const GLImpactService = {
   /**
    * Calculates Debit/Credit impact for GRN (Goods Receipt Note)
    *
    * NetSuite Accounting Rules:
    *   DEBIT  : Inventory Asset Account (item.asset_account_id or COA Inventory/Stock Asset)
-   *   CREDIT : GRNI / Accrued Purchase Liability Account (grniAccountId or dynamic COA lookup)
+   *   CREDIT : Purchase Discount Account (if line discount exists)
+   *   DEBIT  : Input Tax (GST) Account (if line tax exists)
+   *   CREDIT : GRNI / Accrued Purchase Liability Account (Net GRN Value)
    */
   calculateGRNImpact: async (
     source_name: string,
@@ -390,16 +500,28 @@ export const GLImpactService = {
     if (!grn) throw new Error(`GRN record #${grnId} not found`);
 
     const lines: GLLineInput[] = [];
-    let totalGRNValue = 0;
+    let totalGrossSum = 0;
+    let totalDiscountSum = 0;
+    let totalTaxSum = 0;
     const grnLines = ((grn as any).lineItems || []) as any[];
 
     for (const lineItem of grnLines) {
-      const rate = Number(lineItem.purchaseOrderLine?.rate || 0);
+      const pol = lineItem.purchaseOrderLine;
+      const poQty = Number(pol?.quantity || lineItem.orderedQty || 1);
+      const unitRate = Number(pol?.rate || lineItem.unitPrice || lineItem.rate || 0);
       const qty = Number(lineItem.acceptedQty > 0 ? lineItem.acceptedQty : lineItem.receivedQty);
-      const amount = Number((qty * rate).toFixed(2));
 
-      if (amount <= 0) continue;
-      totalGRNValue += amount;
+      if (qty <= 0) continue;
+
+      const grossAmount = Number((qty * unitRate).toFixed(2));
+      const discPerUnit = poQty > 0 ? Number(pol?.discount_amount || 0) / poQty : 0;
+      const lineDiscount = Number((qty * discPerUnit).toFixed(2));
+      const taxPerUnit = poQty > 0 ? Number(pol?.tax_amount || 0) / poQty : 0;
+      const lineTax = Number((qty * taxPerUnit).toFixed(2));
+
+      totalGrossSum += grossAmount;
+      totalDiscountSum += lineDiscount;
+      totalTaxSum += lineTax;
 
       const item = lineItem.item as ItemMaster | undefined;
 
@@ -407,29 +529,53 @@ export const GLImpactService = {
         throw new Error(`Item Master record missing for GRN Line #${lineItem.id}`);
       }
 
-      // Debit account dynamically resolved: Inventory Asset Account
+      // 1. DEBIT: Inventory Asset Account (Gross stock inward)
       const debitAccountId = await resolveInventoryAssetAccount(companyId, item, transaction);
       const accountName = await resolveAccountName(debitAccountId, transaction);
 
       lines.push({
         account_id: debitAccountId,
-        debit_amount: amount,
+        debit_amount: grossAmount,
         credit_amount: 0,
-        narration: `GRN Inward: ${item.item_name} [A/C: ${accountName}] (Qty: ${qty} @ ₹${rate})`
+        narration: `Stock Inward: ${item.item_name} (Qty: ${qty} @ ₹${unitRate.toFixed(2)})`
       });
+
+      // 2. CREDIT: Purchase Discount Account (if discount exists)
+      if (lineDiscount > 0) {
+        const discountAccountId = await resolvePurchaseDiscountAccount(companyId, undefined, transaction);
+        const discountAccountName = await resolveAccountName(discountAccountId, transaction);
+        lines.push({
+          account_id: discountAccountId,
+          debit_amount: 0,
+          credit_amount: lineDiscount,
+          narration: `Purchase Discount: ${item.item_name} [A/C: ${discountAccountName}] (Qty: ${qty})`
+        });
+      }
+
+      // 3. DEBIT: Input Tax (GST) Account (if tax exists)
+      if (lineTax > 0) {
+        const taxAccountId = await resolveInputTaxAccount(companyId, undefined, transaction);
+        const taxAccountName = await resolveAccountName(taxAccountId, transaction);
+        lines.push({
+          account_id: taxAccountId,
+          debit_amount: lineTax,
+          credit_amount: 0,
+          narration: `Input Tax (GST): ${item.item_name} [A/C: ${taxAccountName}] (Qty: ${qty})`
+        });
+      }
     }
 
-    // CREDIT: GRNI / Accrued Purchases Liability Account
-    totalGRNValue = Number(totalGRNValue.toFixed(2));
-    if (totalGRNValue > 0) {
+    // 4. CREDIT: GRNI / Accrued Purchases Liability Account (Net GRN Value: Gross - Discount + Tax)
+    const netGRNLiability = Number((totalGrossSum - totalDiscountSum + totalTaxSum).toFixed(2));
+    if (netGRNLiability > 0) {
       const creditAccountId = await resolveGRNIAccount(companyId, grniAccountId, transaction);
       const grniAccountName = await resolveAccountName(creditAccountId, transaction);
 
       lines.push({
         account_id: creditAccountId,
         debit_amount: 0,
-        credit_amount: totalGRNValue,
-        narration: `GRNI Accrual: GRN #${(grn as any).grnNo || grn.id} [A/C: ${grniAccountName}]`
+        credit_amount: netGRNLiability,
+        narration: `Accrued Purchase Liability - GRN #${(grn as any).grnNo || grn.id} [A/C: ${grniAccountName}]`
       });
     }
 
@@ -574,41 +720,7 @@ export const GLImpactService = {
     // DEBIT: Input Tax Account
     const finalTaxAmount = Number((totalLineTax > 0 ? totalLineTax : Number((invoice as any).taxAmount || 0)).toFixed(2));
     if (finalTaxAmount > 0) {
-      let resolvedTaxAccountId = taxAccountId;
-
-      if (!resolvedTaxAccountId) {
-        const taxAccount = await ChartOfAccountMaster.findOne({
-          where: { CompanyId: companyId, isActive: true },
-          include: [
-            {
-              association: "accountType",
-              where: {
-                [Op.or]: [
-                  { account_type_name: { [Op.like]: "%Tax%" } },
-                  { account_type_name: { [Op.like]: "%Duty%" } },
-                  { account_type_name: { [Op.like]: "%Duties%" } },
-                  { account_type_name: { [Op.like]: "%GST%" } },
-                ],
-              },
-            },
-          ],
-          transaction,
-        });
-
-        if (taxAccount) {
-          resolvedTaxAccountId = taxAccount.id;
-        } else {
-          const firstLineItem = invLines[0]?.item as ItemMaster | undefined;
-          resolvedTaxAccountId = firstLineItem?.expense_account_id || firstLineItem?.asset_account_id || undefined;
-        }
-      }
-
-      if (!resolvedTaxAccountId) {
-        throw new Error(
-          `Tax Amount exists on Invoice #${invoice.invoiceNumber}, but no Input Tax Account ID was provided or could be resolved.`
-        );
-      }
-
+      const resolvedTaxAccountId = await resolveInputTaxAccount(companyId, taxAccountId, transaction);
       const taxAccountName = await resolveAccountName(resolvedTaxAccountId, transaction);
 
       lines.push({
@@ -1073,20 +1185,58 @@ export const GLImpactService = {
     const resolvedClearingAccountId = await resolvePurchaseReturnClearingAccount(companyId, clearingAccountId, transaction);
     const clearingAccountName = await resolveAccountName(resolvedClearingAccountId, transaction);
 
-    const lines: GLLineInput[] = [
-      {
-        account_id: resolvedApAccountId,
-        debit_amount: totalValue,
-        credit_amount: 0,
-        narration: `Vendor Credit AP Reduction: Note #${credit.creditNoteNumber} [A/C: ${apAccountName}]`
-      },
-      {
-        account_id: resolvedClearingAccountId,
+    const cLines = ((credit as any).creditLines || []) as any[];
+    let subtotalValue = 0;
+    for (const cLine of cLines) {
+      const qty = Number(cLine.creditQty || 0);
+      const price = Number(cLine.unitPrice || 0);
+      subtotalValue += Number((qty * price).toFixed(2));
+    }
+    subtotalValue = Number(subtotalValue.toFixed(2));
+
+    const lines: GLLineInput[] = [];
+
+    // 1. DEBIT: Accounts Payable Account (Reduces vendor liability)
+    lines.push({
+      account_id: resolvedApAccountId,
+      debit_amount: totalValue,
+      credit_amount: 0,
+      narration: `Vendor Credit AP Reduction: Note #${credit.creditNoteNumber} [A/C: ${apAccountName}]`
+    });
+
+    // 2. CREDIT: Purchase Return Clearing Account (Offset fulfillment accrual)
+    const clearingAmount = subtotalValue > 0 ? subtotalValue : totalValue;
+    lines.push({
+      account_id: resolvedClearingAccountId,
+      debit_amount: 0,
+      credit_amount: clearingAmount,
+      narration: `Vendor Credit Clearing Offset: Note #${credit.creditNoteNumber} [A/C: ${clearingAccountName}]`
+    });
+
+    // 3. Tax / Discount Adjustments if total differs from subtotal
+    const diff = Number((totalValue - clearingAmount).toFixed(2));
+    if (diff > 0) {
+      // Tax reversal credit
+      const taxAccId = await resolveInputTaxAccount(companyId, undefined, transaction);
+      const taxAccName = await resolveAccountName(taxAccId, transaction);
+      lines.push({
+        account_id: taxAccId,
         debit_amount: 0,
-        credit_amount: totalValue,
-        narration: `Vendor Credit Clearing Offset: Note #${credit.creditNoteNumber} [A/C: ${clearingAccountName}]`
-      }
-    ];
+        credit_amount: diff,
+        narration: `Input Tax Reversal: Note #${credit.creditNoteNumber} [A/C: ${taxAccName}]`
+      });
+    } else if (diff < 0) {
+      // Discount reversal debit
+      const absDiff = Math.abs(diff);
+      const discAccId = await resolvePurchaseDiscountAccount(companyId, undefined, transaction);
+      const discAccName = await resolveAccountName(discAccId, transaction);
+      lines.push({
+        account_id: discAccId,
+        debit_amount: absDiff,
+        credit_amount: 0,
+        narration: `Purchase Discount Reversal: Note #${credit.creditNoteNumber} [A/C: ${discAccName}]`
+      });
+    }
 
     return lines;
   },

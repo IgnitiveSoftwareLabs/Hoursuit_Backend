@@ -155,7 +155,7 @@ const ItemMasterController = {
                 {
                     model: HSNSACMaster,
                     as: "hsnSacCode",
-                    attributes: ["id", "code", "type"],
+                    attributes: ["id", "code", "type", "taxPercentage"],
                 },
                 {
                     model: SubsidiaryMaster,
@@ -235,7 +235,7 @@ const ItemMasterController = {
                 {
                     model: HSNSACMaster,
                     as: "hsnSacCode",
-                    attributes: ["id", "code", "type"],
+                    attributes: ["id", "code", "type", "taxPercentage"],
                 },
                 {
                     model: SubsidiaryMaster,

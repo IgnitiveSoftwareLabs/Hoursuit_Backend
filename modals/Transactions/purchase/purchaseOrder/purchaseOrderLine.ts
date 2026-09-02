@@ -25,6 +25,9 @@ interface PurchaseOrderLineAttributes {
     uom_id: number;
     rate?: number;
     amount?: number;
+    discount_percent?: number;
+    discount_amount?: number;
+    subtotal?: number;
     indian_tax_nature?: string;
     tax_rate?: number;
     tax_amount?: number;
@@ -54,6 +57,9 @@ class PurchaseOrderLine extends Model<PurchaseOrderLineAttributes, PurchaseOrder
     public uom_id!: number;
     public rate?: number;
     public amount?: number;
+    public discount_percent?: number;
+    public discount_amount?: number;
+    public subtotal?: number;
     public indian_tax_nature?: string;
     public tax_rate?: number;
     public tax_amount?: number;
@@ -78,6 +84,9 @@ class PurchaseOrderLine extends Model<PurchaseOrderLineAttributes, PurchaseOrder
             uom_id: Joi.number().integer().positive().required(),
             rate: Joi.number().min(0).optional(),
             amount: Joi.number().min(0).optional(),
+            discount_percent: Joi.number().min(0).max(100).optional(),
+            discount_amount: Joi.number().min(0).optional(),
+            subtotal: Joi.number().min(0).optional(),
             indian_tax_nature: Joi.string().valid("Good", "Services").optional(),
             use_rate_calculation: Joi.boolean().required(),
             work_category_id: Joi.number().integer().positive().optional().allow(null),
@@ -143,6 +152,21 @@ PurchaseOrderLine.init(
             allowNull: true,
         },
         amount: {
+            type: DataTypes.DECIMAL(15, 2),
+            allowNull: true,
+            defaultValue: 0,
+        },
+        discount_percent: {
+            type: DataTypes.DECIMAL(5, 2),
+            allowNull: true,
+            defaultValue: 0,
+        },
+        discount_amount: {
+            type: DataTypes.DECIMAL(15, 2),
+            allowNull: true,
+            defaultValue: 0,
+        },
+        subtotal: {
             type: DataTypes.DECIMAL(15, 2),
             allowNull: true,
             defaultValue: 0,

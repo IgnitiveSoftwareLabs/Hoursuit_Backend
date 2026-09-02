@@ -4,6 +4,7 @@ import { StatusCodes } from "http-status-codes";
 import { Op } from "sequelize";
 
 import ChartOfAccountMaster from "../../../../modals/masters/chartOfAccount/chartOfAccount";
+import AccountTypeMaster from "../../../../modals/platform/accountType/accountType";
 import { GRN, GRNLine } from "../../../../modals/Transactions/purchase/GRN";
 import { findCompanyForUser } from "../../../../utils/findCompanyForUser";
 import Warehouse from "../../../../modals/masters/warehouse/warehouse";
@@ -11,6 +12,7 @@ import TransportationMode from "../../../../modals/masters/transportMode/transpo
 import CityMaster from "../../../../modals/masters/city/city";
 import { InventoryService } from "../../../../utils/inventoryService";
 import ItemMaster from "../../../../modals/masters/items/itemMaster";
+import UOMMaster from "../../../../modals/masters/UOM/UOMMaster";
 import { GLImpactService } from "../../../../utils/glImpactService";
 import { CustomRequest } from "../../../../typeRequest/customReq";
 import { normalizeGRNStatus } from "../../../../utils/p2pStatus";
@@ -20,6 +22,16 @@ import {
 } from "../../../../modals/Transactions/purchase/purchaseOrder";
 import sequelize from "../../../../dbconfig/dbconfig";
 
+export const isDecimalAllowedForUOM = (uomObjOrName: any): boolean => {
+    if (!uomObjOrName) return true;
+    if (typeof uomObjOrName === "object" && uomObjOrName.allow_decimals !== undefined && uomObjOrName.allow_decimals !== null) {
+        return Boolean(uomObjOrName.allow_decimals);
+    }
+    const name = String(typeof uomObjOrName === "object" ? uomObjOrName.uom_name || uomObjOrName.name || "" : uomObjOrName).trim().toUpperCase();
+    const DISCRETE_UOMS = ["EACH", "EA", "PCS", "PIECE", "PIECES", "BOX", "BOXES", "UNIT", "UNITS", "PAIR", "PAIRS", "SET", "SETS", "NOS", "NUMBER", "NUMBERS", "BAG", "BAGS", "PACK", "PACKS", "CARTON", "CARTONS", "DRUM", "DRUMS", "BOTTLE", "BOTTLES", "CAN", "CANS", "ROLL", "ROLLS", "BARREL", "BARRELS"];
+    return !DISCRETE_UOMS.includes(name);
+};
+
 const normalizeOptionalId = (value: unknown) => {
     if (value === null || value === undefined || value === "") {
         return null;
@@ -27,17 +39,17 @@ const normalizeOptionalId = (value: unknown) => {
     return Number(value);
 };
 
-const itemIncludeConfig = {
+const getItemIncludeConfig = () => ({
     model: ItemMaster,
     as: "item",
     attributes: ["id", "item_code", "item_name", "item_desc", "track_inventory", "cost_price", "default_rate", "asset_account_id", "income_account_id", "cogs_account_id", "expense_account_id"],
     include: [
-        { model: ChartOfAccountMaster, as: "asset_account", attributes: ["id", "account_number", "account_name"], include: [{ association: "accountType", attributes: ["id", "account_type_name"] }] },
-        { model: ChartOfAccountMaster, as: "income_account", attributes: ["id", "account_number", "account_name"], include: [{ association: "accountType", attributes: ["id", "account_type_name"] }] },
-        { model: ChartOfAccountMaster, as: "cogs_account", attributes: ["id", "account_number", "account_name"], include: [{ association: "accountType", attributes: ["id", "account_type_name"] }] },
-        { model: ChartOfAccountMaster, as: "expense_account", attributes: ["id", "account_number", "account_name"], include: [{ association: "accountType", attributes: ["id", "account_type_name"] }] },
+        { model: ChartOfAccountMaster, as: "asset_account", attributes: ["id", "account_number", "account_name"], include: [{ model: AccountTypeMaster, as: "accountType", attributes: ["id", "account_type_name"] }] },
+        { model: ChartOfAccountMaster, as: "income_account", attributes: ["id", "account_number", "account_name"], include: [{ model: AccountTypeMaster, as: "accountType", attributes: ["id", "account_type_name"] }] },
+        { model: ChartOfAccountMaster, as: "cogs_account", attributes: ["id", "account_number", "account_name"], include: [{ model: AccountTypeMaster, as: "accountType", attributes: ["id", "account_type_name"] }] },
+        { model: ChartOfAccountMaster, as: "expense_account", attributes: ["id", "account_number", "account_name"], include: [{ model: AccountTypeMaster, as: "accountType", attributes: ["id", "account_type_name"] }] },
     ],
-};
+});
 
 const GRNController = {
     createGRN: asyncHandler(async (req: CustomRequest, res: Response) => {
@@ -102,10 +114,42 @@ const GRNController = {
                 throw new Error("Valid grnDate is required");
             }
 
+            let poSummary: any = null;
+            const batchReceivedByPoLineId: Record<number, number> = {};
+
+            if (headerPayload.purchaseOrderId) {
+                poSummary = await InventoryService.getPurchaseOrderReceiptSummary(
+                    headerPayload.purchaseOrderId,
+                    CompanyId,
+                    undefined,
+                    transaction
+                );
+
+                const po = poSummary.purchaseOrder;
+                if (!po) {
+                    res.status(StatusCodes.BAD_REQUEST);
+                    throw new Error(`Referenced Purchase Order #${headerPayload.purchaseOrderId} does not exist`);
+                }
+
+                const poStatus = String(po.status || "").toUpperCase();
+                if (poStatus === "DRAFT") {
+                    res.status(StatusCodes.BAD_REQUEST);
+                    throw new Error(`Cannot create GRN for Purchase Order ${po.purchaseNo || po.id} because it is in DRAFT status. Purchase Order must be approved first.`);
+                }
+                if (poStatus === "CANCELLED") {
+                    res.status(StatusCodes.BAD_REQUEST);
+                    throw new Error(`Cannot create GRN for Purchase Order ${po.purchaseNo || po.id} because it is CANCELLED.`);
+                }
+                if (poSummary.isFullyReceived || poSummary.totalRemainingQty <= 0) {
+                    res.status(StatusCodes.BAD_REQUEST);
+                    throw new Error(`Purchase Order ${po.purchaseNo || po.id} has already been fully received across existing receipts.`);
+                }
+            }
+
             const preparedLineItems: any[] = [];
             for (let index = 0; index < lineItems.length; index++) {
                 const lineItem = lineItems[index];
-                const orderedQty = Number(lineItem.orderedQty);
+                let orderedQty = Number(lineItem.orderedQty);
                 const receivedQty = Number(lineItem.receivedQty);
                 const acceptedQty =
                     lineItem.acceptedQty !== undefined && lineItem.acceptedQty !== ""
@@ -116,9 +160,101 @@ const GRNController = {
                         ? Number(lineItem.rejectedQty)
                         : 0;
 
+                const itemId = Number(lineItem.itemId);
+                const poLineId = normalizeOptionalId(lineItem.purchaseOrderLineId);
+
+                if (!itemId) {
+                    res.status(StatusCodes.BAD_REQUEST);
+                    throw new Error(`itemId is required in line item ${index + 1}`);
+                }
+                if (!receivedQty || receivedQty <= 0) {
+                    res.status(StatusCodes.BAD_REQUEST);
+                    throw new Error(`receivedQty must be greater than zero in line item ${index + 1}`);
+                }
+                if (acceptedQty < 0) {
+                    res.status(StatusCodes.BAD_REQUEST);
+                    throw new Error(`acceptedQty cannot be negative in line item ${index + 1}`);
+                }
+                if (rejectedQty < 0) {
+                    res.status(StatusCodes.BAD_REQUEST);
+                    throw new Error(`rejectedQty cannot be negative in line item ${index + 1}`);
+                }
+                if (acceptedQty > receivedQty) {
+                    res.status(StatusCodes.BAD_REQUEST);
+                    throw new Error(`acceptedQty (${acceptedQty}) cannot exceed receivedQty (${receivedQty}) in line item ${index + 1}`);
+                }
+                if (rejectedQty > receivedQty) {
+                    res.status(StatusCodes.BAD_REQUEST);
+                    throw new Error(`rejectedQty (${rejectedQty}) cannot exceed receivedQty (${receivedQty}) in line item ${index + 1}`);
+                }
+                if (acceptedQty + rejectedQty > receivedQty) {
+                    res.status(StatusCodes.BAD_REQUEST);
+                    throw new Error(`The sum of acceptedQty (${acceptedQty}) and rejectedQty (${rejectedQty}) cannot exceed receivedQty (${receivedQty}) in line item ${index + 1}`);
+                }
+
+                if (lineItem.manufacturingDate && lineItem.expiryDate) {
+                    const mfg = new Date(lineItem.manufacturingDate);
+                    const exp = new Date(lineItem.expiryDate);
+                    if (exp.getTime() < mfg.getTime()) {
+                        res.status(StatusCodes.BAD_REQUEST);
+                        throw new Error(`expiryDate cannot be earlier than manufacturingDate in line item ${index + 1}`);
+                    }
+                }
+
+                if (poSummary) {
+                    const matchedSummary = poSummary.lineSummaries.find((s: any) =>
+                        (poLineId && Number(s.purchaseOrderLineId) === Number(poLineId)) ||
+                        (!poLineId && Number(s.itemId) === itemId)
+                    );
+
+                    if (!matchedSummary) {
+                        res.status(StatusCodes.BAD_REQUEST);
+                        throw new Error(`Line item ${index + 1} (Item #${itemId}) does not belong to Purchase Order ${poSummary.purchaseOrder?.purchaseNo || headerPayload.purchaseOrderId}`);
+                    }
+
+                    if (poLineId && Number(matchedSummary.itemId) !== itemId) {
+                        res.status(StatusCodes.BAD_REQUEST);
+                        throw new Error(`Item mismatch for PO Line #${poLineId} in line item ${index + 1}: PO Line is for item #${matchedSummary.itemId}, but line item specifies #${itemId}`);
+                    }
+
+                    orderedQty = matchedSummary.orderedQty;
+
+                    const priorBatchQty = batchReceivedByPoLineId[matchedSummary.purchaseOrderLineId] || 0;
+                    const remainingForLine = Math.max(0, matchedSummary.remainingQty - priorBatchQty);
+                    const itemName = matchedSummary.item?.item_name || matchedSummary.item?.item_code || `Item #${itemId}`;
+
+                    if (remainingForLine <= 0) {
+                        res.status(StatusCodes.BAD_REQUEST);
+                        throw new Error(`Item '${itemName}' (PO line #${matchedSummary.purchaseOrderLineId}) has already been fully received across existing GRN(s).`);
+                    }
+
+                    if (receivedQty > remainingForLine) {
+                        res.status(StatusCodes.BAD_REQUEST);
+                        throw new Error(`Received quantity (${receivedQty}) exceeds remaining open quantity (${remainingForLine}) for item '${itemName}' in line item ${index + 1}. (PO Ordered: ${matchedSummary.orderedQty}, Previously Received/Drafted: ${matchedSummary.previouslyReceivedQty}${priorBatchQty > 0 ? `, Current Batch: ${priorBatchQty}` : ""}).`);
+                    }
+
+                    batchReceivedByPoLineId[matchedSummary.purchaseOrderLineId] = priorBatchQty + receivedQty;
+
+                    const uomObj = matchedSummary.uom || (lineItem.uom_id ? await UOMMaster.findByPk(lineItem.uom_id, { transaction }) : null);
+                    if (uomObj && !isDecimalAllowedForUOM(uomObj)) {
+                        if (receivedQty % 1 !== 0 || acceptedQty % 1 !== 0 || rejectedQty % 1 !== 0) {
+                            res.status(StatusCodes.BAD_REQUEST);
+                            throw new Error(`Decimals are not permitted for UOM '${uomObj.uom_name || "discrete"}' in line item ${index + 1}. Quantities must be whole numbers.`);
+                        }
+                    }
+                } else {
+                    if (!orderedQty || orderedQty <= 0) {
+                        orderedQty = receivedQty;
+                    }
+                    if (receivedQty > orderedQty) {
+                        res.status(StatusCodes.BAD_REQUEST);
+                        throw new Error(`receivedQty (${receivedQty}) cannot exceed orderedQty (${orderedQty}) in line item ${index + 1}`);
+                    }
+                }
+
                 const linePayload: any = {
-                    purchaseOrderLineId: normalizeOptionalId(lineItem.purchaseOrderLineId),
-                    itemId: Number(lineItem.itemId),
+                    purchaseOrderLineId: poLineId,
+                    itemId,
                     locationId: normalizeOptionalId(lineItem.locationId || lineItem.location_id),
                     onHand: lineItem.onHand !== undefined && lineItem.onHand !== "" ? Number(lineItem.onHand) : 0,
                     orderedQty,
@@ -134,27 +270,6 @@ const GRNController = {
                     user_id,
                 };
 
-                if (!linePayload.itemId) {
-                    res.status(StatusCodes.BAD_REQUEST);
-                    throw new Error(`itemId is required in line item ${index + 1}`);
-                }
-                if (!linePayload.orderedQty || linePayload.orderedQty <= 0) {
-                    res.status(StatusCodes.BAD_REQUEST);
-                    throw new Error(`orderedQty must be greater than zero in line item ${index + 1}`);
-                }
-                if (!linePayload.receivedQty || linePayload.receivedQty <= 0) {
-                    res.status(StatusCodes.BAD_REQUEST);
-                    throw new Error(`receivedQty must be greater than zero in line item ${index + 1}`);
-                }
-                if (linePayload.acceptedQty < 0) {
-                    res.status(StatusCodes.BAD_REQUEST);
-                    throw new Error(`acceptedQty cannot be negative in line item ${index + 1}`);
-                }
-                if (linePayload.rejectedQty < 0) {
-                    res.status(StatusCodes.BAD_REQUEST);
-                    throw new Error(`rejectedQty cannot be negative in line item ${index + 1}`);
-                }
-
                 preparedLineItems.push(linePayload);
             }
 
@@ -165,6 +280,11 @@ const GRNController = {
                 linePayload.grnHeaderId = createdHeader.id;
                 const createdLine = await GRNLine.create(linePayload, { transaction });
                 createdLineItems.push(createdLine);
+            }
+
+            // Sync Purchase Order status based on all GRNs
+            if (headerPayload.purchaseOrderId) {
+                await InventoryService.syncPurchaseOrderStatus(headerPayload.purchaseOrderId, CompanyId, transaction);
             }
 
             const isActiveGRNStatus = (s: string) => ["RECEIVED", "QC_PENDING", "QC_COMPLETED", "COMPLETED"].includes(s);
@@ -198,7 +318,7 @@ const GRNController = {
                 },
             });
         } catch (error) {
-            console.log(error)
+            console.log(error);
             await transaction.rollback();
             throw error;
         }
@@ -229,6 +349,7 @@ const GRNController = {
         const total = await GRN.count({ where: whereClause });
         const grns = await GRN.findAll({
             where: whereClause,
+            subQuery: false,
             include: [
                 {
                     model: PurchaseOrder,
@@ -245,11 +366,16 @@ const GRNController = {
                     as: "lineItems",
                     required: false,
                     include: [
-                        itemIncludeConfig,
+                        getItemIncludeConfig(),
                         {
                             model: CityMaster,
                             as: "location",
                             attributes: ["id", "city_name"],
+                        },
+                        {
+                            model: PurchaseOrderLine,
+                            as: "purchaseOrderLine",
+                            attributes: ["id", "quantity", "rate", "amount", "discount_amount", "subtotal", "tax_amount", "line_total"],
                         },
                     ],
                 },
@@ -285,6 +411,7 @@ const GRNController = {
 
         const grn = await GRN.findOne({
             where: { id: Number(id), CompanyId },
+            subQuery: false,
             include: [
                 {
                     model: PurchaseOrder,
@@ -294,7 +421,7 @@ const GRNController = {
                         {
                             model: PurchaseOrderLine,
                             as: "purchaseOrderLines",
-                            include: [itemIncludeConfig],
+                            include: [getItemIncludeConfig()],
                         },
                     ],
                 },
@@ -308,7 +435,7 @@ const GRNController = {
                     as: "lineItems",
                     required: false,
                     include: [
-                        itemIncludeConfig,
+                        getItemIncludeConfig(),
                         {
                             model: CityMaster,
                             as: "location",
@@ -317,7 +444,7 @@ const GRNController = {
                         {
                             model: PurchaseOrderLine,
                             as: "purchaseOrderLine",
-                            attributes: ["id", "quantity", "rate"],
+                            attributes: ["id", "quantity", "rate", "amount", "discount_amount", "subtotal", "tax_amount", "line_total"],
                         },
                     ],
                 },
@@ -382,7 +509,7 @@ const GRNController = {
 
             const headerPayload: any = {
                 grnNo: String(header.grnNo || existingGRN.grnNo).trim(),
-                purchaseOrderId: normalizeOptionalId(header.purchaseOrderId),
+                purchaseOrderId: normalizeOptionalId(header.purchaseOrderId) ?? existingGRN.purchaseOrderId,
                 warehouseId: normalizeOptionalId(header.warehouseId) ?? existingGRN.warehouseId,
                 godownId: normalizeOptionalId(header.godownId) ?? existingGRN.godownId,
                 stackId: normalizeOptionalId(header.stackId) ?? existingGRN.stackId,
@@ -407,6 +534,31 @@ const GRNController = {
                 throw new Error("Valid grnDate is required");
             }
 
+            const targetPoId = headerPayload.purchaseOrderId;
+            let poSummary: any = null;
+            const batchReceivedByPoLineId: Record<number, number> = {};
+
+            if (targetPoId) {
+                poSummary = await InventoryService.getPurchaseOrderReceiptSummary(
+                    targetPoId,
+                    CompanyId,
+                    existingGRN.id,
+                    transaction
+                );
+
+                const po = poSummary.purchaseOrder;
+                if (!po) {
+                    res.status(StatusCodes.BAD_REQUEST);
+                    throw new Error(`Referenced Purchase Order #${targetPoId} does not exist`);
+                }
+
+                const poStatus = String(po.status || "").toUpperCase();
+                if (poStatus === "CANCELLED") {
+                    res.status(StatusCodes.BAD_REQUEST);
+                    throw new Error(`Cannot update GRN for Purchase Order ${po.purchaseNo || po.id} because it is CANCELLED.`);
+                }
+            }
+
             await existingGRN.update(headerPayload, { transaction });
 
             await GRNLine.destroy({
@@ -417,7 +569,7 @@ const GRNController = {
             const updatedLineItems: any[] = [];
             for (let index = 0; index < lineItems.length; index++) {
                 const lineItem = lineItems[index];
-                const orderedQty = Number(lineItem.orderedQty);
+                let orderedQty = Number(lineItem.orderedQty);
                 const receivedQty = Number(lineItem.receivedQty);
                 const acceptedQty =
                     lineItem.acceptedQty !== undefined && lineItem.acceptedQty !== ""
@@ -428,10 +580,102 @@ const GRNController = {
                         ? Number(lineItem.rejectedQty)
                         : 0;
 
+                const itemId = Number(lineItem.itemId);
+                const poLineId = normalizeOptionalId(lineItem.purchaseOrderLineId);
+
+                if (!itemId) {
+                    res.status(StatusCodes.BAD_REQUEST);
+                    throw new Error(`itemId is required in line item ${index + 1}`);
+                }
+                if (!receivedQty || receivedQty <= 0) {
+                    res.status(StatusCodes.BAD_REQUEST);
+                    throw new Error(`receivedQty must be greater than zero in line item ${index + 1}`);
+                }
+                if (acceptedQty < 0) {
+                    res.status(StatusCodes.BAD_REQUEST);
+                    throw new Error(`acceptedQty cannot be negative in line item ${index + 1}`);
+                }
+                if (rejectedQty < 0) {
+                    res.status(StatusCodes.BAD_REQUEST);
+                    throw new Error(`rejectedQty cannot be negative in line item ${index + 1}`);
+                }
+                if (acceptedQty > receivedQty) {
+                    res.status(StatusCodes.BAD_REQUEST);
+                    throw new Error(`acceptedQty (${acceptedQty}) cannot exceed receivedQty (${receivedQty}) in line item ${index + 1}`);
+                }
+                if (rejectedQty > receivedQty) {
+                    res.status(StatusCodes.BAD_REQUEST);
+                    throw new Error(`rejectedQty (${rejectedQty}) cannot exceed receivedQty (${receivedQty}) in line item ${index + 1}`);
+                }
+                if (acceptedQty + rejectedQty > receivedQty) {
+                    res.status(StatusCodes.BAD_REQUEST);
+                    throw new Error(`The sum of acceptedQty (${acceptedQty}) and rejectedQty (${rejectedQty}) cannot exceed receivedQty (${receivedQty}) in line item ${index + 1}`);
+                }
+
+                if (lineItem.manufacturingDate && lineItem.expiryDate) {
+                    const mfg = new Date(lineItem.manufacturingDate);
+                    const exp = new Date(lineItem.expiryDate);
+                    if (exp.getTime() < mfg.getTime()) {
+                        res.status(StatusCodes.BAD_REQUEST);
+                        throw new Error(`expiryDate cannot be earlier than manufacturingDate in line item ${index + 1}`);
+                    }
+                }
+
+                if (poSummary) {
+                    const matchedSummary = poSummary.lineSummaries.find((s: any) =>
+                        (poLineId && Number(s.purchaseOrderLineId) === Number(poLineId)) ||
+                        (!poLineId && Number(s.itemId) === itemId)
+                    );
+
+                    if (!matchedSummary) {
+                        res.status(StatusCodes.BAD_REQUEST);
+                        throw new Error(`Line item ${index + 1} (Item #${itemId}) does not belong to Purchase Order ${poSummary.purchaseOrder?.purchaseNo || targetPoId}`);
+                    }
+
+                    if (poLineId && Number(matchedSummary.itemId) !== itemId) {
+                        res.status(StatusCodes.BAD_REQUEST);
+                        throw new Error(`Item mismatch for PO Line #${poLineId} in line item ${index + 1}: PO Line is for item #${matchedSummary.itemId}, but line item specifies #${itemId}`);
+                    }
+
+                    orderedQty = matchedSummary.orderedQty;
+
+                    const priorBatchQty = batchReceivedByPoLineId[matchedSummary.purchaseOrderLineId] || 0;
+                    const remainingForLine = Math.max(0, matchedSummary.remainingQty - priorBatchQty);
+                    const itemName = matchedSummary.item?.item_name || matchedSummary.item?.item_code || `Item #${itemId}`;
+
+                    if (remainingForLine <= 0) {
+                        res.status(StatusCodes.BAD_REQUEST);
+                        throw new Error(`Item '${itemName}' (PO line #${matchedSummary.purchaseOrderLineId}) has already been fully received across existing GRN(s).`);
+                    }
+
+                    if (receivedQty > remainingForLine) {
+                        res.status(StatusCodes.BAD_REQUEST);
+                        throw new Error(`Received quantity (${receivedQty}) exceeds remaining open quantity (${remainingForLine}) for item '${itemName}' in line item ${index + 1}. (PO Ordered: ${matchedSummary.orderedQty}, Previously Received/Drafted by Other Receipts: ${matchedSummary.previouslyReceivedQty}${priorBatchQty > 0 ? `, Current Batch: ${priorBatchQty}` : ""}).`);
+                    }
+
+                    batchReceivedByPoLineId[matchedSummary.purchaseOrderLineId] = priorBatchQty + receivedQty;
+
+                    const uomObj = matchedSummary.uom || (lineItem.uom_id ? await UOMMaster.findByPk(lineItem.uom_id, { transaction }) : null);
+                    if (uomObj && !isDecimalAllowedForUOM(uomObj)) {
+                        if (receivedQty % 1 !== 0 || acceptedQty % 1 !== 0 || rejectedQty % 1 !== 0) {
+                            res.status(StatusCodes.BAD_REQUEST);
+                            throw new Error(`Decimals are not permitted for UOM '${uomObj.uom_name || "discrete"}' in line item ${index + 1}. Quantities must be whole numbers.`);
+                        }
+                    }
+                } else {
+                    if (!orderedQty || orderedQty <= 0) {
+                        orderedQty = receivedQty;
+                    }
+                    if (receivedQty > orderedQty) {
+                        res.status(StatusCodes.BAD_REQUEST);
+                        throw new Error(`receivedQty (${receivedQty}) cannot exceed orderedQty (${orderedQty}) in line item ${index + 1}`);
+                    }
+                }
+
                 const linePayload: any = {
                     grnHeaderId: existingGRN.id,
-                    purchaseOrderLineId: normalizeOptionalId(lineItem.purchaseOrderLineId),
-                    itemId: Number(lineItem.itemId),
+                    purchaseOrderLineId: poLineId,
+                    itemId,
                     locationId: normalizeOptionalId(lineItem.locationId || lineItem.location_id),
                     onHand: lineItem.onHand !== undefined && lineItem.onHand !== "" ? Number(lineItem.onHand) : 0,
                     orderedQty,
@@ -447,29 +691,13 @@ const GRNController = {
                     user_id,
                 };
 
-                if (!linePayload.itemId) {
-                    res.status(StatusCodes.BAD_REQUEST);
-                    throw new Error(`itemId is required in line item ${index + 1}`);
-                }
-                if (!linePayload.orderedQty || linePayload.orderedQty <= 0) {
-                    res.status(StatusCodes.BAD_REQUEST);
-                    throw new Error(`orderedQty must be greater than zero in line item ${index + 1}`);
-                }
-                if (!linePayload.receivedQty || linePayload.receivedQty <= 0) {
-                    res.status(StatusCodes.BAD_REQUEST);
-                    throw new Error(`receivedQty must be greater than zero in line item ${index + 1}`);
-                }
-                if (linePayload.acceptedQty < 0) {
-                    res.status(StatusCodes.BAD_REQUEST);
-                    throw new Error(`acceptedQty cannot be negative in line item ${index + 1}`);
-                }
-                if (linePayload.rejectedQty < 0) {
-                    res.status(StatusCodes.BAD_REQUEST);
-                    throw new Error(`rejectedQty cannot be negative in line item ${index + 1}`);
-                }
-
                 const createdLine = await GRNLine.create(linePayload, { transaction });
                 updatedLineItems.push(createdLine);
+            }
+
+            // Sync Purchase Order status based on all GRNs
+            if (targetPoId) {
+                await InventoryService.syncPurchaseOrderStatus(targetPoId, CompanyId, transaction);
             }
 
             await transaction.commit();
@@ -576,6 +804,11 @@ const GRNController = {
                     t
                 );
             }
+
+            // Sync Purchase Order status whenever GRN status changes
+            if (grn.purchaseOrderId) {
+                await InventoryService.syncPurchaseOrderStatus(grn.purchaseOrderId, CompanyId, t);
+            }
         });
 
         res.status(StatusCodes.OK).json({
@@ -611,8 +844,13 @@ const GRNController = {
             throw new Error("Cannot delete GRN. Only DRAFT GRNs can be deleted.");
         }
 
+        const poIdToSync = grn.purchaseOrderId;
         await GRNLine.destroy({ where: { grnHeaderId: grn.id } });
         await grn.destroy();
+
+        if (poIdToSync) {
+            await InventoryService.syncPurchaseOrderStatus(poIdToSync, CompanyId);
+        }
 
         res.status(StatusCodes.OK).json({
             success: true,

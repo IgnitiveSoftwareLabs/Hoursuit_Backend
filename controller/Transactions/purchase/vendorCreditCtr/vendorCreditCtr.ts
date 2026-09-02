@@ -48,6 +48,9 @@ export const VendorCreditController = {
             const creditNoteNumber = String(header.creditNoteNumber || `VC-${Date.now()}`).trim();
             const creditDate = header.creditDate ? new Date(header.creditDate) : new Date();
 
+            let totalSubtotal = 0;
+            let totalDiscount = 0;
+            let totalTax = 0;
             let totalHeaderAmount = 0;
             const preparedLines: any[] = [];
 
@@ -106,7 +109,27 @@ export const VendorCreditController = {
                     }
                 }
 
-                const lineTotal = Number((creditQty * unitPrice).toFixed(2));
+                const grossLineAmount = Number((creditQty * unitPrice).toFixed(2));
+                const discountPercent = line.discountPercent !== undefined && line.discountPercent !== null ? Number(line.discountPercent) : 0;
+                let discountAmount = line.discountAmount !== undefined && line.discountAmount !== null ? Number(line.discountAmount) : 0;
+                if (discountPercent > 0 && discountAmount === 0) {
+                    discountAmount = Number(((grossLineAmount * discountPercent) / 100).toFixed(2));
+                }
+
+                const taxableLineAmount = Math.max(0, Number((grossLineAmount - discountAmount).toFixed(2)));
+                const taxPercent = line.taxPercent !== undefined && line.taxPercent !== null ? Number(line.taxPercent) : 0;
+                let taxAmount = line.taxAmount !== undefined && line.taxAmount !== null ? Number(line.taxAmount) : 0;
+                if (taxPercent > 0 && taxAmount === 0) {
+                    taxAmount = Number(((taxableLineAmount * taxPercent) / 100).toFixed(2));
+                }
+
+                const lineTotal = line.totalAmount !== undefined && line.totalAmount !== null && Number(line.totalAmount) > 0
+                    ? Number(Number(line.totalAmount).toFixed(2))
+                    : Number((taxableLineAmount + taxAmount).toFixed(2));
+
+                totalSubtotal += grossLineAmount;
+                totalDiscount += discountAmount;
+                totalTax += taxAmount;
                 totalHeaderAmount += lineTotal;
 
                 preparedLines.push({
@@ -114,6 +137,10 @@ export const VendorCreditController = {
                     itemId: Number(line.itemId),
                     creditQty,
                     unitPrice,
+                    discountPercent,
+                    discountAmount,
+                    taxPercent,
+                    taxAmount,
                     totalAmount: lineTotal,
                     remarks: line.remarks || null
                 });
@@ -127,6 +154,9 @@ export const VendorCreditController = {
                 fulfillmentHeaderId: header.fulfillmentHeaderId ? Number(header.fulfillmentHeaderId) : null,
                 purchaseInvoiceHeaderId: header.purchaseInvoiceHeaderId ? Number(header.purchaseInvoiceHeaderId) : null,
                 creditDate,
+                subtotal: Number(totalSubtotal.toFixed(2)),
+                discountAmount: Number(totalDiscount.toFixed(2)),
+                taxAmount: Number(totalTax.toFixed(2)),
                 totalAmount: Number(totalHeaderAmount.toFixed(2)),
                 status: "POSTED",
                 remarks: header.remarks || null,
@@ -152,6 +182,40 @@ export const VendorCreditController = {
                 undefined,
                 transaction
             );
+
+            // Update parent PurchaseReturnHeader status to RETURNED if fully credited
+            if (vendorCreditHeader.purchaseReturnHeaderId) {
+                const parentReturn = await PurchaseReturnHeader.findOne({
+                    where: { id: vendorCreditHeader.purchaseReturnHeaderId, companyId },
+                    transaction
+                });
+                if (parentReturn) {
+                    const allParentLines = await PurchaseReturnLine.findAll({
+                        where: { returnHeaderId: parentReturn.id },
+                        transaction
+                    });
+                    let totalAuthorized = 0;
+                    let totalCredited = 0;
+
+                    for (const pLine of allParentLines) {
+                        totalAuthorized += Number(pLine.returnQty || 0);
+                        const cLinesForPLine = await VendorCreditLine.findAll({
+                            where: { purchaseReturnLineId: pLine.id },
+                            include: [{
+                                model: VendorCreditHeader,
+                                as: "creditHeader",
+                                where: { status: { [Op.ne]: "CANCELLED" } }
+                            }],
+                            transaction
+                        });
+                        totalCredited += cLinesForPLine.reduce((s, c) => s + Number(c.creditQty || 0), 0);
+                    }
+
+                    if (totalCredited >= totalAuthorized && totalAuthorized > 0) {
+                        await parentReturn.update({ status: "RETURNED" }, { transaction });
+                    }
+                }
+            }
 
             await transaction.commit();
 

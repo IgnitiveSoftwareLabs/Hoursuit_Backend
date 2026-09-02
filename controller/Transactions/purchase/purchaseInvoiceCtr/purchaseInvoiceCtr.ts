@@ -4,18 +4,19 @@ import { StatusCodes } from "http-status-codes";
 import { Op } from "sequelize";
 
 import { PurchaseInvoiceHeader, PurchaseInvoiceLine } from "../../../../modals/Transactions/purchase/purchaseInvoice";
-import PurchaseOrder from "../../../../modals/Transactions/purchase/purchaseOrder/purchaseOrderHeader";
-// import { PurchaseOrderLine } from "../../../../modals/Transactions/purchase/purchaseOrder";
+import { PurchaseOrder, PurchaseOrderLine } from "../../../../modals/Transactions/purchase/purchaseOrder";
 import VendorDetails from "../../../../modals/masters/vendorDetails/vendorDetails";
 import { normalizePurchaseInvoiceStatus } from "../../../../utils/p2pStatus";
 import { findCompanyForUser } from "../../../../utils/findCompanyForUser";
 import ItemMaster from "../../../../modals/masters/items/itemMaster";
 import { GLImpactService } from "../../../../utils/glImpactService";
-import { GRN } from "../../../../modals/Transactions/purchase/GRN";
+import { GRN, GRNLine } from "../../../../modals/Transactions/purchase/GRN";
 import { CustomRequest } from "../../../../typeRequest/customReq";
 import sequelize from "../../../../dbconfig/dbconfig";
 
 import ChartOfAccountMaster from "../../../../modals/masters/chartOfAccount/chartOfAccount";
+import AccountTypeMaster from "../../../../modals/platform/accountType/accountType";
+import HSNSACMaster from "../../../../modals/masters/HSN-SAC/HSNSACMaster";
 
 const normalizeOptionalId = (value: unknown) => {
     if (value === null || value === "") {
@@ -24,17 +25,18 @@ const normalizeOptionalId = (value: unknown) => {
     return Number(value);
 };
 
-const itemIncludeConfig = {
+const getItemIncludeConfig = () => ({
     model: ItemMaster,
     as: "item",
     attributes: ["id", "item_code", "item_name", "item_desc", "track_inventory", "cost_price", "default_rate", "asset_account_id", "income_account_id", "cogs_account_id", "expense_account_id"],
     include: [
-        { model: ChartOfAccountMaster, as: "asset_account", attributes: ["id", "account_number", "account_name"], include: [{ association: "accountType", attributes: ["id", "account_type_name"] }] },
-        { model: ChartOfAccountMaster, as: "income_account", attributes: ["id", "account_number", "account_name"], include: [{ association: "accountType", attributes: ["id", "account_type_name"] }] },
-        { model: ChartOfAccountMaster, as: "cogs_account", attributes: ["id", "account_number", "account_name"], include: [{ association: "accountType", attributes: ["id", "account_type_name"] }] },
-        { model: ChartOfAccountMaster, as: "expense_account", attributes: ["id", "account_number", "account_name"], include: [{ association: "accountType", attributes: ["id", "account_type_name"] }] },
+        { model: HSNSACMaster, as: "hsnSacCode", attributes: ["id", "code", "taxPercentage"] },
+        { model: ChartOfAccountMaster, as: "asset_account", attributes: ["id", "account_number", "account_name"], include: [{ model: AccountTypeMaster, as: "accountType", attributes: ["id", "account_type_name"] }] },
+        { model: ChartOfAccountMaster, as: "income_account", attributes: ["id", "account_number", "account_name"], include: [{ model: AccountTypeMaster, as: "accountType", attributes: ["id", "account_type_name"] }] },
+        { model: ChartOfAccountMaster, as: "cogs_account", attributes: ["id", "account_number", "account_name"], include: [{ model: AccountTypeMaster, as: "accountType", attributes: ["id", "account_type_name"] }] },
+        { model: ChartOfAccountMaster, as: "expense_account", attributes: ["id", "account_number", "account_name"], include: [{ model: AccountTypeMaster, as: "accountType", attributes: ["id", "account_type_name"] }] },
     ],
-};
+});
 
 const calculateLineTotals = (quantity: number, unitPrice: number, discountPercent: number, taxPercent: number) => {
     const baseAmount = quantity * unitPrice;
@@ -117,15 +119,6 @@ const PurchaseInvoiceController = {
                 const lineItem = lineItems[index];
                 const quantity = Number(lineItem.quantity);
                 const unitPrice = Number(lineItem.unitPrice);
-
-                const discountPercent = lineItem.discountPercent !== undefined && lineItem.discountPercent !== ""
-                    ? Number(lineItem.discountPercent)
-                    : 0;
-
-                const taxPercent = lineItem.taxPercent !== undefined && lineItem.taxPercent !== ""
-                    ? Number(lineItem.taxPercent)
-                    : 0;
-
                 const itemId = Number(lineItem.itemId);
 
                 if (Number.isNaN(itemId) || itemId <= 0) {
@@ -143,21 +136,65 @@ const PurchaseInvoiceController = {
                     throw new Error(`unitPrice cannot be negative in line item ${index + 1}`);
                 }
 
+                const poLineId = normalizeOptionalId(lineItem.poLineId);
+                const grnLineId = normalizeOptionalId(lineItem.grnLineId);
+
+                // Tax Immutability: Determine tax percentage strictly from PO
+                let poTaxRate = lineItem.taxPercent !== undefined && lineItem.taxPercent !== ""
+                    ? Number(lineItem.taxPercent)
+                    : 0;
+
+                if (grnLineId) {
+                    const grnLine = await GRNLine.findByPk(grnLineId, {
+                        include: [{ model: PurchaseOrderLine, as: "purchaseOrderLine" }],
+                        transaction,
+                    });
+                    if (grnLine) {
+                        const pol = (grnLine as any).purchaseOrderLine;
+                        if (pol) {
+                            poTaxRate = Number(pol.tax_rate || 0);
+                        }
+                        // 3-Way Match validation:
+                        const maxReceivable = Number(grnLine.acceptedQty > 0 ? grnLine.acceptedQty : grnLine.receivedQty || 0);
+                        if (quantity > maxReceivable) {
+                            res.status(StatusCodes.BAD_REQUEST);
+                            throw new Error(`Billed quantity (${quantity}) exceeds received quantity (${maxReceivable}) for GRN Line #${grnLine.id}`);
+                        }
+                    }
+                } else if (poLineId) {
+                    const poLine = await PurchaseOrderLine.findByPk(poLineId, { transaction });
+                    if (poLine) {
+                        poTaxRate = Number(poLine.tax_rate || 0);
+                        const maxPoQty = Number(poLine.quantity || 0);
+                        if (quantity > maxPoQty) {
+                            res.status(StatusCodes.BAD_REQUEST);
+                            throw new Error(`Billed quantity (${quantity}) exceeds approved PO quantity (${maxPoQty}) for PO Line #${poLine.id}`);
+                        }
+                    }
+                } else if (!grnLineId && !poLineId && (poTaxRate === 0 || !lineItem.taxPercent)) {
+                    const itm = await ItemMaster.findByPk(itemId, {
+                        include: [{ model: HSNSACMaster, as: "hsnSacCode" }],
+                        transaction,
+                    });
+                    if (itm && (itm as any).hsnSacCode?.taxPercentage) {
+                        poTaxRate = Number((itm as any).hsnSacCode.taxPercentage);
+                    }
+                }
+
+                const discountPercent = lineItem.discountPercent !== undefined && lineItem.discountPercent !== ""
+                    ? Number(lineItem.discountPercent)
+                    : 0;
+
                 if (Number.isNaN(discountPercent) || discountPercent < 0 || discountPercent > 100) {
                     res.status(StatusCodes.BAD_REQUEST);
                     throw new Error(`discountPercent must be between 0 and 100 in line item ${index + 1}`);
-                }
-
-                if (Number.isNaN(taxPercent) || taxPercent < 0 || taxPercent > 100) {
-                    res.status(StatusCodes.BAD_REQUEST);
-                    throw new Error(`taxPercent must be between 0 and 100 in line item ${index + 1}`);
                 }
 
                 const { discountAmount: lineDiscount, taxAmount: lineTax, lineTotal } = calculateLineTotals(
                     quantity,
                     unitPrice,
                     discountPercent,
-                    taxPercent
+                    poTaxRate
                 );
 
                 // Accumulate totals
@@ -167,8 +204,8 @@ const PurchaseInvoiceController = {
 
                 // Store calculated line
                 calculatedLines.push({
-                    poLineId: normalizeOptionalId(lineItem.poLineId),
-                    grnLineId: normalizeOptionalId(lineItem.grnLineId),
+                    poLineId,
+                    grnLineId,
                     itemId,
                     description: lineItem.description || null,
                     batchNo: lineItem.batchNo || null,
@@ -176,7 +213,7 @@ const PurchaseInvoiceController = {
                     unitPrice,
                     discountPercent,
                     discountAmount: lineDiscount,
-                    taxPercent,
+                    taxPercent: poTaxRate,
                     taxAmount: lineTax,
                     lineTotal,
                     remarks: lineItem.remarks || null,
@@ -326,6 +363,7 @@ const PurchaseInvoiceController = {
         const total = await PurchaseInvoiceHeader.count({ where: whereClause });
         const invoices = await PurchaseInvoiceHeader.findAll({
             where: whereClause,
+            subQuery: false,
             include: [
                 {
                     model: PurchaseOrder,
@@ -357,7 +395,7 @@ const PurchaseInvoiceController = {
                     model: PurchaseInvoiceLine,
                     as: "purchaseInvoiceLines",
                     required: false,
-                    include: [itemIncludeConfig],
+                    include: [getItemIncludeConfig()],
                 },
             ],
             offset,
@@ -391,6 +429,7 @@ const PurchaseInvoiceController = {
 
         const invoice = await PurchaseInvoiceHeader.findOne({
             where: { id: Number(id), companyId },
+            subQuery: false,
             include: [
                 {
                     model: PurchaseOrder,
@@ -422,7 +461,7 @@ const PurchaseInvoiceController = {
                     model: PurchaseInvoiceLine,
                     as: "purchaseInvoiceLines",
                     required: false,
-                    include: [itemIncludeConfig],
+                    include: [getItemIncludeConfig()],
                 },
             ],
         });
@@ -533,41 +572,71 @@ const PurchaseInvoiceController = {
                 const lineItem = lineItems[index];
                 const quantity = Number(lineItem.quantity);
                 const unitPrice = Number(lineItem.unitPrice);
+                const itemId = Number(lineItem.itemId);
+
+                if (!itemId) {
+                    res.status(StatusCodes.BAD_REQUEST);
+                    throw new Error(`itemId is required in line item ${index + 1}`);
+                }
+                if (!quantity || quantity <= 0) {
+                    res.status(StatusCodes.BAD_REQUEST);
+                    throw new Error(`quantity must be greater than zero in line item ${index + 1}`);
+                }
+                if (unitPrice < 0) {
+                    res.status(StatusCodes.BAD_REQUEST);
+                    throw new Error(`unitPrice cannot be negative in line item ${index + 1}`);
+                }
+
+                const poLineId = normalizeOptionalId(lineItem.poLineId);
+                const grnLineId = normalizeOptionalId(lineItem.grnLineId);
+
+                let poTaxRate = lineItem.taxPercent !== undefined && lineItem.taxPercent !== "" ? Number(lineItem.taxPercent) : 0;
+
+                if (grnLineId) {
+                    const grnLine = await GRNLine.findByPk(grnLineId, {
+                        include: [{ model: PurchaseOrderLine, as: "purchaseOrderLine" }],
+                        transaction,
+                    });
+                    const pol = (grnLine as any)?.purchaseOrderLine;
+                    if (pol) {
+                        poTaxRate = Number(pol.tax_rate || 0);
+                    }
+                } else if (poLineId) {
+                    const poLine = await PurchaseOrderLine.findByPk(poLineId, { transaction });
+                    if (poLine) {
+                        poTaxRate = Number(poLine.tax_rate || 0);
+                    }
+                } else if (!grnLineId && !poLineId && (poTaxRate === 0 || !lineItem.taxPercent)) {
+                    const itm = await ItemMaster.findByPk(itemId, {
+                        include: [{ model: HSNSACMaster, as: "hsnSacCode" }],
+                        transaction,
+                    });
+                    if (itm && (itm as any).hsnSacCode?.taxPercentage) {
+                        poTaxRate = Number((itm as any).hsnSacCode.taxPercentage);
+                    }
+                }
+
                 const discountPercent = lineItem.discountPercent !== undefined && lineItem.discountPercent !== "" ? Number(lineItem.discountPercent) : 0;
-                const taxPercent = lineItem.taxPercent !== undefined && lineItem.taxPercent !== "" ? Number(lineItem.taxPercent) : 0;
-                const { discountAmount: lineDiscount, taxAmount: lineTax, lineTotal } = calculateLineTotals(quantity, unitPrice, discountPercent, taxPercent);
+                const { discountAmount: lineDiscount, taxAmount: lineTax, lineTotal } = calculateLineTotals(quantity, unitPrice, discountPercent, poTaxRate);
 
                 const linePayload: any = {
                     invoiceHeaderId: existingInvoice.id,
-                    poLineId: normalizeOptionalId(lineItem.poLineId),
-                    grnLineId: normalizeOptionalId(lineItem.grnLineId),
-                    itemId: Number(lineItem.itemId),
+                    poLineId,
+                    grnLineId,
+                    itemId,
                     description: lineItem.description || null,
                     batchNo: lineItem.batchNo || null,
                     quantity,
                     unitPrice,
                     discountPercent,
                     discountAmount: lineDiscount,
-                    taxPercent,
+                    taxPercent: poTaxRate,
                     taxAmount: lineTax,
                     lineTotal,
                     remarks: lineItem.remarks || null,
                     CompanyId: companyId,
                     user_id,
                 };
-
-                if (!linePayload.itemId) {
-                    res.status(StatusCodes.BAD_REQUEST);
-                    throw new Error(`itemId is required in line item ${index + 1}`);
-                }
-                if (!linePayload.quantity || linePayload.quantity <= 0) {
-                    res.status(StatusCodes.BAD_REQUEST);
-                    throw new Error(`quantity must be greater than zero in line item ${index + 1}`);
-                }
-                if (linePayload.unitPrice < 0) {
-                    res.status(StatusCodes.BAD_REQUEST);
-                    throw new Error(`unitPrice cannot be negative in line item ${index + 1}`);
-                }
 
                 const createdLine = await PurchaseInvoiceLine.create(linePayload, { transaction });
                 updatedLineItems.push(createdLine);

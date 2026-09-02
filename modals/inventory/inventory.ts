@@ -281,45 +281,74 @@ class InventoryCount extends Model<InventoryCountAttributes, InventoryCountCreat
                 return targetInventory;
             }
         } else {
-            if (existingInventory) {
-                // Update existing entry for ADD
-                const newQty = Number(existingInventory.qty) + Number(qty);
+            // ADD operation:
+            // Check if item is already present in inventory for this company/warehouse
+            let targetInventory = existingInventory;
+            if (!targetInventory) {
+                const searchWhere: any = { item_id, CompanyId, isActive: true };
+                if (warehouseId !== null && warehouseId !== undefined) {
+                    searchWhere.warehouseId = warehouseId;
+                }
+                targetInventory = await InventoryCount.findOne({
+                    where: searchWhere,
+                    order: [['updatedAt', 'DESC']],
+                    ...(transaction ? { transaction } : {})
+                });
 
-                const updatedRate = rate !== undefined && rate !== null ? Number(rate) : Number(existingInventory.rate) || 0;
-                const newAmount = newQty * updatedRate;
+                if (!targetInventory) {
+                    targetInventory = await InventoryCount.findOne({
+                        where: { item_id, CompanyId, isActive: true },
+                        order: [['updatedAt', 'DESC']],
+                        ...(transaction ? { transaction } : {})
+                    });
+                }
+            }
+
+            if (targetInventory) {
+                // Item is ALREADY PRESENT -> increase quantity in inventory
+                const currentQty = Math.max(0, Number(targetInventory.qty) || 0);
+                const newQty = currentQty + Number(qty);
+                const currentAmount = Number(targetInventory.amount || (currentQty * Number(targetInventory.rate || 0)));
+                const addAmount = Number(amount !== undefined && amount !== null ? amount : (Number(qty) * Number(rate || 0)));
+                const newTotalAmount = Number((currentAmount + addAmount).toFixed(2));
+                const weightedRate = newQty > 0 ? Number((newTotalAmount / newQty).toFixed(4)) : (rate || Number(targetInventory.rate) || 0);
 
                 const today = new Date();
-                const createdDate = new Date(existingInventory.createdAt);
+                const createdDate = new Date(targetInventory.createdAt);
                 const timeDifference = today.getTime() - createdDate.getTime();
                 const daysDifference = Math.floor(timeDifference / (1000 * 3600 * 24));
 
-                await existingInventory.update({
+                await targetInventory.update({
                     qty: newQty,
-                    rate: rate !== undefined && rate !== null ? rate : existingInventory.rate,
-                    amount: newAmount,
+                    rate: weightedRate,
+                    amount: newTotalAmount,
                     inventory_age: daysDifference,
-                    location: location || existingInventory.location,
-                    warehouseId: warehouseId !== undefined && warehouseId !== null ? warehouseId : existingInventory.warehouseId,
-                    godownId: godownId !== undefined && godownId !== null ? godownId : existingInventory.godownId,
-                    stack: stack !== undefined && stack !== null ? stack : existingInventory.stack,
-                    work_category_id: work_category_id !== undefined && work_category_id !== null ? work_category_id : existingInventory.work_category_id,
+                    uom_id: uom_id || targetInventory.uom_id,
+                    location: location || targetInventory.location,
+                    warehouseId: (warehouseId !== undefined && warehouseId !== null) ? warehouseId : targetInventory.warehouseId,
+                    godownId: (godownId !== undefined && godownId !== null) ? godownId : targetInventory.godownId,
+                    stack: (stack !== undefined && stack !== null) ? stack : targetInventory.stack,
+                    work_category_id: (work_category_id !== undefined && work_category_id !== null) ? work_category_id : targetInventory.work_category_id,
+                    lot_number: lot_number || targetInventory.lot_number,
                 }, transaction ? { transaction } : {});
 
-                return existingInventory;
+                return targetInventory;
             } else {
-                // Create new inventory entry for ADD
+                // Item is NEW -> create new inventory entry
                 const inventoryAge = 0;
+                const newRate = rate || 0;
+                const newAmount = amount !== undefined && amount !== null ? amount : Number((Number(qty) * Number(newRate)).toFixed(2));
 
                 const newInventory = await InventoryCount.create({
                     work_order: work_order || undefined,
                     item_id,
                     qty,
                     uom_id,
-                    rate: rate || 0,
-                    amount: amount || 0,
+                    rate: newRate,
+                    amount: newAmount,
                     inventory_age: inventoryAge,
                     location: location || undefined,
-                    warehouseId: warehouseId as any,
+                    warehouseId: (warehouseId || 1) as any,
                     godownId: godownId as any,
                     stack: stack as any,
                     work_category_id: work_category_id !== undefined && work_category_id !== null ? work_category_id : undefined,

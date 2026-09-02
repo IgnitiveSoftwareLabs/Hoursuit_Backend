@@ -16,6 +16,11 @@ export interface PurchaseReturnLineAttributes {
     rejectedQty?: number;
     damagedQty?: number;
     unitPrice: number;
+    discountPercent?: number | null;
+    discountAmount?: number | null;
+    taxPercent?: number | null;
+    taxAmount?: number | null;
+    lineTotal?: number | null;
     reason?: string | null;
     remarks?: string | null;
     createdAt?: Date;
@@ -30,6 +35,11 @@ export interface PurchaseReturnLineCreationAttributes
         | "batchNo"
         | "rejectedQty"
         | "damagedQty"
+        | "discountPercent"
+        | "discountAmount"
+        | "taxPercent"
+        | "taxAmount"
+        | "lineTotal"
         | "reason"
         | "unitPrice"
         | "remarks"
@@ -52,6 +62,11 @@ class PurchaseReturnLine
     public rejectedQty!: number;
     public damagedQty!: number;
     public unitPrice!: number;
+    public discountPercent!: number | null;
+    public discountAmount!: number | null;
+    public taxPercent!: number | null;
+    public taxAmount!: number | null;
+    public lineTotal!: number | null;
     public reason!: string | null;
     public remarks!: string | null;
     public readonly createdAt!: Date;
@@ -64,11 +79,16 @@ class PurchaseReturnLine
             itemId: Joi.number().integer().positive().required(),
             batchNo: Joi.string().max(100).optional(),
             returnQty: Joi.number().positive().required(),
-            rejectedQty: Joi.number().positive().optional(),
-            damagedQty: Joi.number().positive().optional(),
-            unitPrice: Joi.number().positive().required(),
-            reason: Joi.string().max(500).optional(),
-            remarks: Joi.string().max(500).optional(),
+            rejectedQty: Joi.number().optional(),
+            damagedQty: Joi.number().optional(),
+            unitPrice: Joi.number().min(0).required(),
+            discountPercent: Joi.number().min(0).optional().allow(null),
+            discountAmount: Joi.number().min(0).optional().allow(null),
+            taxPercent: Joi.number().min(0).optional().allow(null),
+            taxAmount: Joi.number().min(0).optional().allow(null),
+            lineTotal: Joi.number().min(0).optional().allow(null),
+            reason: Joi.string().max(500).optional().allow(null, ""),
+            remarks: Joi.string().max(500).optional().allow(null, ""),
             isActive: Joi.boolean().optional(),
         });
         return schema.validate(line);
@@ -115,6 +135,31 @@ PurchaseReturnLine.init(
         unitPrice: {
             type: DataTypes.DECIMAL(18, 2),
             allowNull: false,
+        },
+        discountPercent: {
+            type: DataTypes.DECIMAL(10, 2),
+            allowNull: true,
+            defaultValue: 0,
+        },
+        discountAmount: {
+            type: DataTypes.DECIMAL(18, 2),
+            allowNull: true,
+            defaultValue: 0,
+        },
+        taxPercent: {
+            type: DataTypes.DECIMAL(10, 2),
+            allowNull: true,
+            defaultValue: 0,
+        },
+        taxAmount: {
+            type: DataTypes.DECIMAL(18, 2),
+            allowNull: true,
+            defaultValue: 0,
+        },
+        lineTotal: {
+            type: DataTypes.DECIMAL(18, 2),
+            allowNull: true,
+            defaultValue: 0,
         },
         reason: {
             type: DataTypes.TEXT,

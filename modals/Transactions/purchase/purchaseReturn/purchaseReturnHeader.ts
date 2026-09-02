@@ -19,6 +19,10 @@ export interface PurchaseReturnHeaderAttributes {
     grnHeaderId?: number | null;
     returnDate: Date;
     status: "DRAFT" | "AUTHORIZED" | "APPROVED" | "PARTIALLY_FULFILLED" | "FULFILLED" | "RETURNED" | "CANCELLED";
+    subtotal?: number | null;
+    discountAmount?: number | null;
+    taxAmount?: number | null;
+    totalAmount?: number | null;
     reason?: string | null;
     remarks?: string | null;
     user_id: number;
@@ -38,6 +42,10 @@ export interface PurchaseReturnHeaderCreationAttributes
         | "grnHeaderId"
         | "returnDate"
         | "status"
+        | "subtotal"
+        | "discountAmount"
+        | "taxAmount"
+        | "totalAmount"
         | "reason"
         | "remarks"
         | "user_id"
@@ -60,6 +68,10 @@ class PurchaseReturnHeader
     public grnHeaderId!: number | null;
     public returnDate!: Date;
     public status!: "DRAFT" | "AUTHORIZED" | "APPROVED" | "PARTIALLY_FULFILLED" | "FULFILLED" | "RETURNED" | "CANCELLED";
+    public subtotal!: number | null;
+    public discountAmount!: number | null;
+    public taxAmount!: number | null;
+    public totalAmount!: number | null;
     public reason!: string | null;
     public remarks!: string | null;
     public user_id!: number;
@@ -76,9 +88,13 @@ class PurchaseReturnHeader
             purchaseInvoiceHeaderId: Joi.number().integer().positive().optional().allow(null),
             returnDate: Joi.date().required(),
             status: Joi.string().required(),
+            subtotal: Joi.number().optional().allow(null),
+            discountAmount: Joi.number().optional().allow(null),
+            taxAmount: Joi.number().optional().allow(null),
+            totalAmount: Joi.number().optional().allow(null),
             user_id: Joi.number().integer().positive().required(),
-            reason: Joi.string().max(500).optional(),
-            remarks: Joi.string().max(500).optional(),
+            reason: Joi.string().max(500).optional().allow(null, ""),
+            remarks: Joi.string().max(500).optional().allow(null, ""),
             isActive: Joi.boolean().optional(),
         });
         return schema.validate(header);
@@ -133,6 +149,26 @@ PurchaseReturnHeader.init(
             ),
             allowNull: false,
             defaultValue: "DRAFT",
+        },
+        subtotal: {
+            type: DataTypes.DECIMAL(18, 2),
+            allowNull: true,
+            defaultValue: 0,
+        },
+        discountAmount: {
+            type: DataTypes.DECIMAL(18, 2),
+            allowNull: true,
+            defaultValue: 0,
+        },
+        taxAmount: {
+            type: DataTypes.DECIMAL(18, 2),
+            allowNull: true,
+            defaultValue: 0,
+        },
+        totalAmount: {
+            type: DataTypes.DECIMAL(18, 2),
+            allowNull: true,
+            defaultValue: 0,
         },
         reason: {
             type: DataTypes.TEXT,

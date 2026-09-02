@@ -16,6 +16,9 @@ export interface VendorCreditHeaderAttributes {
     fulfillmentHeaderId?: number | null;
     purchaseInvoiceHeaderId?: number | null;
     creditDate: Date;
+    subtotal?: number | null;
+    discountAmount?: number | null;
+    taxAmount?: number | null;
     totalAmount: number;
     status: "DRAFT" | "POSTED" | "CANCELLED";
     remarks?: string | null;
@@ -33,6 +36,9 @@ export interface VendorCreditHeaderCreationAttributes
         | "purchaseReturnHeaderId"
         | "fulfillmentHeaderId"
         | "purchaseInvoiceHeaderId"
+        | "subtotal"
+        | "discountAmount"
+        | "taxAmount"
         | "status"
         | "remarks"
         | "createdAt"
@@ -53,6 +59,9 @@ export class VendorCreditHeader
     public fulfillmentHeaderId!: number | null;
     public purchaseInvoiceHeaderId!: number | null;
     public creditDate!: Date;
+    public subtotal!: number | null;
+    public discountAmount!: number | null;
+    public taxAmount!: number | null;
     public totalAmount!: number;
     public status!: "DRAFT" | "POSTED" | "CANCELLED";
     public remarks!: string | null;
@@ -96,6 +105,21 @@ VendorCreditHeader.init(
         creditDate: {
             type: DataTypes.DATE,
             allowNull: false,
+        },
+        subtotal: {
+            type: DataTypes.DECIMAL(15, 4),
+            allowNull: true,
+            defaultValue: 0,
+        },
+        discountAmount: {
+            type: DataTypes.DECIMAL(15, 4),
+            allowNull: true,
+            defaultValue: 0,
+        },
+        taxAmount: {
+            type: DataTypes.DECIMAL(15, 4),
+            allowNull: true,
+            defaultValue: 0,
         },
         totalAmount: {
             type: DataTypes.DECIMAL(15, 4),

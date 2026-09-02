@@ -30,7 +30,8 @@ const inferVoucherTypeCode = (entryNo?: string, narration?: string): string | nu
 
     if (haystack.includes("GRN")) return "GRN";
     if (haystack.includes("PURCHASE INVOICE") || haystack.includes("PURCHASE_INVOICE") || haystack.includes("INV")) return "PURCHASE_INVOICE";
-    if (haystack.includes("RETURN")) return "PURCHASE_RETURN";
+    if (haystack.includes("VENDOR CREDIT") || haystack.includes("VENDOR_CREDIT") || haystack.includes("VC")) return "VENDOR_CREDIT";
+    if (haystack.includes("RETURN") || haystack.includes("PRF")) return "PURCHASE_RETURN";
     if (haystack.includes("PAYMENT")) return "PAYMENT";
 
     return null;
@@ -64,6 +65,7 @@ const resolveVoucherTypeId = async (
     candidates.add("GRN");
     candidates.add("PURCHASE_INVOICE");
     candidates.add("PURCHASE_RETURN");
+    candidates.add("VENDOR_CREDIT");
     candidates.add("GENERAL_JOURNAL");
 
     for (const candidate of Array.from(candidates)) {

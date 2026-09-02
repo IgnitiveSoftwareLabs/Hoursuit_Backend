@@ -17,6 +17,7 @@ import Stack from '../../modals/masters/stack/stack';
 import ChartOfAccountMaster from '../../modals/masters/chartOfAccount/chartOfAccount';
 import AccountTypeMaster from '../../modals/platform/accountType/accountType';
 import Company from '../../modals/company/company';
+import CityMaster from '../../modals/masters/city/city';
 
 interface CustomRequest extends Request {
     user?: any;
@@ -96,6 +97,11 @@ const InventoryController = {
             model: ItemMaster,
             as: "item",
             include: [
+                {
+                    model: CityMaster,
+                    as: "location",
+                    attributes: ["id", "city_name"],
+                },
                 {
                     model: ChartOfAccountMaster,
                     as: "asset_account",
@@ -265,6 +271,11 @@ const InventoryController = {
                     model: ItemMaster,
                     as: "item",
                     include: [
+                        {
+                            model: CityMaster,
+                            as: "location",
+                            attributes: ["id", "city_name"],
+                        },
                         {
                             model: ChartOfAccountMaster,
                             as: "asset_account",
