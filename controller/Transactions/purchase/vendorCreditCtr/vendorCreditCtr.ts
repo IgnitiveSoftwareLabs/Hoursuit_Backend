@@ -146,6 +146,11 @@ export const VendorCreditController = {
                 });
             }
 
+            const finalSubtotal = totalSubtotal > 0 ? totalSubtotal : Number(header.subtotal || 0);
+            const finalDiscount = totalDiscount > 0 ? totalDiscount : Number(header.discountAmount || header.discount_amount || 0);
+            const finalTax = totalTax > 0 ? totalTax : Number(header.taxAmount || header.tax_amount || 0);
+            const finalTotal = totalHeaderAmount > 0 ? totalHeaderAmount : Number(header.totalAmount || header.total_amount || header.amount || (finalSubtotal - finalDiscount + finalTax) || 0);
+
             const vendorCreditHeader = await VendorCreditHeader.create({
                 companyId,
                 creditNoteNumber,
@@ -154,10 +159,10 @@ export const VendorCreditController = {
                 fulfillmentHeaderId: header.fulfillmentHeaderId ? Number(header.fulfillmentHeaderId) : null,
                 purchaseInvoiceHeaderId: header.purchaseInvoiceHeaderId ? Number(header.purchaseInvoiceHeaderId) : null,
                 creditDate,
-                subtotal: Number(totalSubtotal.toFixed(2)),
-                discountAmount: Number(totalDiscount.toFixed(2)),
-                taxAmount: Number(totalTax.toFixed(2)),
-                totalAmount: Number(totalHeaderAmount.toFixed(2)),
+                subtotal: Number(finalSubtotal.toFixed(2)),
+                discountAmount: Number(finalDiscount.toFixed(2)),
+                taxAmount: Number(finalTax.toFixed(2)),
+                totalAmount: Number(finalTotal.toFixed(2)),
                 status: "POSTED",
                 remarks: header.remarks || null,
                 user_id

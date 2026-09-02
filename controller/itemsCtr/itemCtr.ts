@@ -84,6 +84,12 @@ const ItemMasterController = {
             validatedSubsidiaryId = Number(subsidiary_id);
         }
 
+        let resolvedItemCode = item_code ? String(item_code).trim() : "";
+        if (!resolvedItemCode) {
+            const count = await ItemMaster.count();
+            resolvedItemCode = `ITM-${String(Number(count) + 1).padStart(4, "0")}`;
+        }
+
         const resolvedItemTypeId = item_type_id !== undefined && item_type_id !== null && String(item_type_id) !== ""
             ? Number(item_type_id)
             : (item_type !== undefined && item_type !== null && String(item_type) !== "" && !isNaN(Number(item_type))
@@ -91,32 +97,32 @@ const ItemMasterController = {
                 : null);
 
         const item = await ItemMaster.create({
-            item_code,
-            item_name,
+            item_code: resolvedItemCode,
+            item_name: String(item_name).trim(),
             item_desc: item_desc || null,
             item_type_id: resolvedItemTypeId,
             track_inventory: track_inventory ?? false,
             sku: sku || null,
             barcode: barcode || null,
-            cost_price: cost_price ? Number(cost_price) : null,
-            min_stock_level: min_stock_level ? Number(min_stock_level) : null,
+            cost_price: cost_price !== undefined && cost_price !== null && cost_price !== "" ? Math.max(0, Number(cost_price)) : null,
+            min_stock_level: min_stock_level !== undefined && min_stock_level !== null && min_stock_level !== "" ? Math.max(0, Number(min_stock_level)) : null,
             hsn_sac_code_id: hsn_sac_code_id ? Number(hsn_sac_code_id) : null,
             uom_id: uom_id ? Number(uom_id) : null,
-            default_rate: default_rate ? Number(default_rate) : null,
+            default_rate: default_rate !== undefined && default_rate !== null && default_rate !== "" ? Math.max(0, Number(default_rate)) : null,
             subsidiary_id: validatedSubsidiaryId,
             class_id: class_id ? Number(class_id) : null,
             department_id: department_id ? Number(department_id) : null,
             location_id: location_id ? Number(location_id) : null,
-            safety_stock_level: safety_stock_level ? Number(safety_stock_level) : null,
-            days: days ? Number(days) : null,
+            safety_stock_level: safety_stock_level !== undefined && safety_stock_level !== null && safety_stock_level !== "" ? Math.max(0, Number(safety_stock_level)) : null,
+            days: days !== undefined && days !== null && days !== "" ? Math.max(0, Number(days)) : null,
             manufacturer: manufacturer || null,
-            purchase_price: purchase_price ? Number(purchase_price) : null,
-            total_value: total_value ? Number(total_value) : null,
+            purchase_price: purchase_price !== undefined && purchase_price !== null && purchase_price !== "" ? Math.max(0, Number(purchase_price)) : null,
+            total_value: total_value !== undefined && total_value !== null && total_value !== "" ? Math.max(0, Number(total_value)) : null,
             purchase_desc: purchase_desc || null,
             item_image: item_image || null,
             sales_desc: sales_desc || null,
-            sales_price: sales_price ? Number(sales_price) : null,
-            shipping_cost: shipping_cost ? Number(shipping_cost) : null,
+            sales_price: sales_price !== undefined && sales_price !== null && sales_price !== "" ? Math.max(0, Number(sales_price)) : null,
+            shipping_cost: shipping_cost !== undefined && shipping_cost !== null && shipping_cost !== "" ? Math.max(0, Number(shipping_cost)) : null,
             asset_account_id: asset_account_id ? Number(asset_account_id) : null,
             income_account_id: income_account_id ? Number(income_account_id) : null,
             cogs_account_id: cogs_account_id ? Number(cogs_account_id) : null,

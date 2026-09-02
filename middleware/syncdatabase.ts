@@ -3,6 +3,7 @@
 // import SecurityQuestion from "../modals/SecurityQuestions/index";
 // import UserSecurityAnswer from "../modals/UserSecurityAnswer/index";
 
+import sequelize from "../dbconfig/dbconfig";
 import { QualityInspectionHeader, QualityInspectionLine } from "../modals/Transactions/purchase/qualityReport";
 import { PurchaseInvoiceHeader, PurchaseInvoiceLine } from "../modals/Transactions/purchase/purchaseInvoice";
 import { PurchasePaymentHeader, PurchasePaymentLine } from "../modals/Transactions/purchase/purchasePayment";

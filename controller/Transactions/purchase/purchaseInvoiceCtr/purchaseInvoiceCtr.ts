@@ -86,23 +86,29 @@ const PurchaseInvoiceController = {
             // New Purchase Invoice always starts as DRAFT
             const status = "DRAFT";
 
-            let invoiceNumber = String(header.invoiceNumber || "").trim();
+            let invoiceNumber = String(header.invoiceNumber || header.vendorInvoiceNumber || "").trim();
             if (!invoiceNumber) {
                 const count = await PurchaseInvoiceHeader.count({ where: { companyId }, transaction });
-                let autoNo = `INV-${String(count + 1).padStart(4, "0")}`;
-                const exists = await PurchaseInvoiceHeader.findOne({ where: { invoiceNumber: autoNo, companyId }, transaction });
-                if (exists) {
-                    autoNo = `INV-${Date.now()}`;
+                let counter = count + 1;
+                let autoNo = `VB-${new Date().getFullYear()}-${String(counter).padStart(4, "0")}`;
+                let exists = await PurchaseInvoiceHeader.findOne({ where: { invoiceNumber: autoNo }, transaction });
+                while (exists) {
+                    counter++;
+                    autoNo = `VB-${new Date().getFullYear()}-${String(counter).padStart(4, "0")}`;
+                    exists = await PurchaseInvoiceHeader.findOne({ where: { invoiceNumber: autoNo }, transaction });
                 }
                 invoiceNumber = autoNo;
+            } else {
+                const exists = await PurchaseInvoiceHeader.findOne({ where: { invoiceNumber }, transaction });
+                if (exists) {
+                    res.status(StatusCodes.BAD_REQUEST);
+                    throw new Error(`Vendor Bill with invoice number '${invoiceNumber}' already exists. Please generate a new bill number.`);
+                }
             }
 
-            let vendorInvoiceNumber = String(header.vendorInvoiceNumber || "").trim();
-            if (!vendorInvoiceNumber) {
-                vendorInvoiceNumber = `VINV-${invoiceNumber}`;
-            }
+            let vendorInvoiceNumber = String(header.vendorInvoiceNumber || invoiceNumber).trim();
 
-            const invoiceType = String(header.invoiceType || "Standard Bill").trim();
+            const invoiceType = String(header.invoiceType || "REGULAR").trim();
 
             if (!invoiceDate || Number.isNaN(invoiceDate.getTime())) {
                 res.status(StatusCodes.BAD_REQUEST);

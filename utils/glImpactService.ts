@@ -1151,9 +1151,11 @@ export const GLImpactService = {
   /**
    * Calculates Debit/Credit impact for Vendor Credit (Vendor Credit Note)
    *
-   * Accounting Rules:
-   *   DEBIT  : Accounts Payable Account (reduces vendor liability)
-   *   CREDIT : Purchase Return Clearing Account (clears temporary return accrual)
+   * NetSuite Double-Entry Accounting Rules:
+   *   DEBIT  : Accounts Payable Account (reduces vendor liability by total net amount)
+   *   DEBIT  : Purchase Discount Reversal Account (if discount was previously received)
+   *   CREDIT : Purchase Return Clearing Account (clears temporary return fulfillment accrual)
+   *   CREDIT : Input Tax (GST) Reversal Account (reverses previously claimed input tax)
    */
   calculateVendorCreditImpact: async (
     creditId: number,
@@ -1187,12 +1189,26 @@ export const GLImpactService = {
 
     const cLines = ((credit as any).creditLines || []) as any[];
     let subtotalValue = 0;
+    let lineDiscountValue = 0;
+    let lineTaxValue = 0;
     for (const cLine of cLines) {
       const qty = Number(cLine.creditQty || 0);
       const price = Number(cLine.unitPrice || 0);
       subtotalValue += Number((qty * price).toFixed(2));
+      lineDiscountValue += Number(cLine.discountAmount || 0);
+      lineTaxValue += Number(cLine.taxAmount || 0);
     }
     subtotalValue = Number(subtotalValue.toFixed(2));
+    lineDiscountValue = Number(lineDiscountValue.toFixed(2));
+    lineTaxValue = Number(lineTaxValue.toFixed(2));
+
+    const headerSubtotal = Number(credit.subtotal || 0);
+    const headerDiscount = Number(credit.discountAmount || 0);
+    const headerTax = Number(credit.taxAmount || 0);
+
+    const finalSubtotal = headerSubtotal > 0 ? headerSubtotal : (subtotalValue > 0 ? subtotalValue : totalValue);
+    const finalDiscount = headerDiscount > 0 ? headerDiscount : lineDiscountValue;
+    const finalTax = headerTax > 0 ? headerTax : lineTaxValue;
 
     const lines: GLLineInput[] = [];
 
@@ -1204,38 +1220,49 @@ export const GLImpactService = {
       narration: `Vendor Credit AP Reduction: Note #${credit.creditNoteNumber} [A/C: ${apAccountName}]`
     });
 
-    // 2. CREDIT: Purchase Return Clearing Account (Offset fulfillment accrual)
-    const clearingAmount = subtotalValue > 0 ? subtotalValue : totalValue;
+    // 2. DEBIT: Purchase Discount Reversal (if discount exists)
+    if (finalDiscount > 0) {
+      const discAccId = await resolvePurchaseDiscountAccount(companyId, undefined, transaction);
+      const discAccName = await resolveAccountName(discAccId, transaction);
+      lines.push({
+        account_id: discAccId,
+        debit_amount: finalDiscount,
+        credit_amount: 0,
+        narration: `Purchase Discount Reversal: Note #${credit.creditNoteNumber} [A/C: ${discAccName}]`
+      });
+    }
+
+    // 3. CREDIT: Purchase Return Clearing Account (Offset fulfillment accrual)
     lines.push({
       account_id: resolvedClearingAccountId,
       debit_amount: 0,
-      credit_amount: clearingAmount,
+      credit_amount: finalSubtotal,
       narration: `Vendor Credit Clearing Offset: Note #${credit.creditNoteNumber} [A/C: ${clearingAccountName}]`
     });
 
-    // 3. Tax / Discount Adjustments if total differs from subtotal
-    const diff = Number((totalValue - clearingAmount).toFixed(2));
-    if (diff > 0) {
-      // Tax reversal credit
+    // 4. CREDIT: Input Tax Reversal (if tax exists)
+    if (finalTax > 0) {
       const taxAccId = await resolveInputTaxAccount(companyId, undefined, transaction);
       const taxAccName = await resolveAccountName(taxAccId, transaction);
       lines.push({
         account_id: taxAccId,
         debit_amount: 0,
-        credit_amount: diff,
+        credit_amount: finalTax,
         narration: `Input Tax Reversal: Note #${credit.creditNoteNumber} [A/C: ${taxAccName}]`
       });
+    }
+
+    // Balancing check: ensure Total Debits === Total Credits
+    const totalDebitSum = Number(lines.reduce((s, l) => s + Number(l.debit_amount || 0), 0).toFixed(2));
+    const totalCreditSum = Number(lines.reduce((s, l) => s + Number(l.credit_amount || 0), 0).toFixed(2));
+    const diff = Number((totalDebitSum - totalCreditSum).toFixed(2));
+
+    if (diff > 0) {
+      // Debits exceed Credits by diff -> adjust last credit line
+      lines[lines.length - 1].credit_amount = Number((Number(lines[lines.length - 1].credit_amount) + diff).toFixed(2));
     } else if (diff < 0) {
-      // Discount reversal debit
-      const absDiff = Math.abs(diff);
-      const discAccId = await resolvePurchaseDiscountAccount(companyId, undefined, transaction);
-      const discAccName = await resolveAccountName(discAccId, transaction);
-      lines.push({
-        account_id: discAccId,
-        debit_amount: absDiff,
-        credit_amount: 0,
-        narration: `Purchase Discount Reversal: Note #${credit.creditNoteNumber} [A/C: ${discAccName}]`
-      });
+      // Credits exceed Debits by abs(diff) -> adjust first debit line
+      lines[0].debit_amount = Number((Number(lines[0].debit_amount) + Math.abs(diff)).toFixed(2));
     }
 
     return lines;
