@@ -83,8 +83,7 @@ const PurchaseInvoiceController = {
             const invoiceDate = header.invoiceDate ? new Date(header.invoiceDate) : null;
             const dueDate = header.dueDate ? new Date(header.dueDate) : null;
 
-            // New Purchase Invoice always starts as DRAFT
-            const status = "DRAFT";
+            const status = normalizePurchaseInvoiceStatus(header.status, "DRAFT");
 
             let invoiceNumber = String(header.invoiceNumber || header.vendorInvoiceNumber || "").trim();
             if (invoiceNumber) {
@@ -305,7 +304,7 @@ const PurchaseInvoiceController = {
                 totalAmount,
                 paidAmount,
                 balanceAmount,
-                status: "DRAFT",
+                status,
                 remarks: header.remarks || null,
                 companyId,
                 user_id,
@@ -343,6 +342,20 @@ const PurchaseInvoiceController = {
                 const createdLine = await PurchaseInvoiceLine.create(linePayload, { transaction });
 
                 createdLineItems.push(createdLine);
+            }
+
+            if (status === "POSTED") {
+                const parsedApAccountId = header.account_id ? Number(header.account_id) : undefined;
+                await GLImpactService.processPurchaseInvoicePosting(
+                    createdHeader.id,
+                    companyId,
+                    user_id,
+                    undefined,
+                    undefined,
+                    parsedApAccountId,
+                    undefined,
+                    transaction
+                );
             }
 
             await transaction.commit();
@@ -682,6 +695,20 @@ const PurchaseInvoiceController = {
                 paidAmount,
                 balanceAmount,
             }, { transaction });
+
+            if (status === "POSTED") {
+                const parsedApAccountId = header.account_id ? Number(header.account_id) : undefined;
+                await GLImpactService.processPurchaseInvoicePosting(
+                    existingInvoice.id,
+                    companyId,
+                    user_id,
+                    undefined,
+                    undefined,
+                    parsedApAccountId,
+                    undefined,
+                    transaction
+                );
+            }
 
             await transaction.commit();
 

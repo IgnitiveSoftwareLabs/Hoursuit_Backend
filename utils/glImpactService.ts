@@ -1212,7 +1212,7 @@ export const GLImpactService = {
 
     const lines: GLLineInput[] = [];
 
-    // 1. DEBIT: Accounts Payable Account (Reduces vendor liability)
+    // 1. DEBIT: Accounts Payable Account (Reduces vendor liability by total net amount)
     lines.push({
       account_id: resolvedApAccountId,
       debit_amount: totalValue,
@@ -1220,50 +1220,13 @@ export const GLImpactService = {
       narration: `Vendor Credit AP Reduction: Note #${credit.creditNoteNumber} [A/C: ${apAccountName}]`
     });
 
-    // 2. DEBIT: Purchase Discount Reversal (if discount exists)
-    if (finalDiscount > 0) {
-      const discAccId = await resolvePurchaseDiscountAccount(companyId, undefined, transaction);
-      const discAccName = await resolveAccountName(discAccId, transaction);
-      lines.push({
-        account_id: discAccId,
-        debit_amount: finalDiscount,
-        credit_amount: 0,
-        narration: `Purchase Discount Reversal: Note #${credit.creditNoteNumber} [A/C: ${discAccName}]`
-      });
-    }
-
-    // 3. CREDIT: Purchase Return Clearing Account (Offset fulfillment accrual)
+    // 2. CREDIT: Purchase Return Clearing Account (Clears return fulfillment accrual for full credit value, no tax line)
     lines.push({
       account_id: resolvedClearingAccountId,
       debit_amount: 0,
-      credit_amount: finalSubtotal,
+      credit_amount: totalValue,
       narration: `Vendor Credit Clearing Offset: Note #${credit.creditNoteNumber} [A/C: ${clearingAccountName}]`
     });
-
-    // 4. CREDIT: Input Tax Reversal (if tax exists)
-    if (finalTax > 0) {
-      const taxAccId = await resolveInputTaxAccount(companyId, undefined, transaction);
-      const taxAccName = await resolveAccountName(taxAccId, transaction);
-      lines.push({
-        account_id: taxAccId,
-        debit_amount: 0,
-        credit_amount: finalTax,
-        narration: `Input Tax Reversal: Note #${credit.creditNoteNumber} [A/C: ${taxAccName}]`
-      });
-    }
-
-    // Balancing check: ensure Total Debits === Total Credits
-    const totalDebitSum = Number(lines.reduce((s, l) => s + Number(l.debit_amount || 0), 0).toFixed(2));
-    const totalCreditSum = Number(lines.reduce((s, l) => s + Number(l.credit_amount || 0), 0).toFixed(2));
-    const diff = Number((totalDebitSum - totalCreditSum).toFixed(2));
-
-    if (diff > 0) {
-      // Debits exceed Credits by diff -> adjust last credit line
-      lines[lines.length - 1].credit_amount = Number((Number(lines[lines.length - 1].credit_amount) + diff).toFixed(2));
-    } else if (diff < 0) {
-      // Credits exceed Debits by abs(diff) -> adjust first debit line
-      lines[0].debit_amount = Number((Number(lines[0].debit_amount) + Math.abs(diff)).toFixed(2));
-    }
 
     return lines;
   },

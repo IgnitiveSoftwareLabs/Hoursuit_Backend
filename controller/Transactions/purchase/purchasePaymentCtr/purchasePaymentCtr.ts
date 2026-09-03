@@ -148,11 +148,59 @@ const PurchasePaymentController = {
             const createdLines: any[] = [];
 
             for (const linePayload of preparedLines) {
-
                 linePayload.paymentHeaderId = createdHeader.id;
 
                 const createdLine = await PurchasePaymentLine.create(linePayload, { transaction });
                 createdLines.push(createdLine);
+            }
+
+            if (status === "POSTED") {
+                const invoiceMap = new Map<number, number>();
+                for (const line of createdLines) {
+                    const invLine = await PurchaseInvoiceLine.findOne({
+                        where: { id: line.purchaseInvoiceLineId, CompanyId: companyId },
+                        include: [{ model: PurchaseInvoiceHeader, as: "invoiceHeader", required: true }],
+                        transaction,
+                    });
+                    if (invLine && (invLine as any).invoiceHeader) {
+                        const inv = (invLine as any).invoiceHeader;
+                        const currentAccum = invoiceMap.get(inv.id) || 0;
+                        invoiceMap.set(inv.id, currentAccum + Number(line.amountPaid || 0));
+                    }
+                }
+
+                if (createdHeader.purchaseInvoiceHeaderId && !invoiceMap.has(createdHeader.purchaseInvoiceHeaderId)) {
+                    invoiceMap.set(createdHeader.purchaseInvoiceHeaderId, Number(createdHeader.totalAmount || 0));
+                }
+
+                for (const [invId, paidThisPayment] of invoiceMap.entries()) {
+                    const invoice = await PurchaseInvoiceHeader.findOne({ where: { id: invId, companyId }, transaction });
+                    if (invoice) {
+                        const currentPaid = Number(invoice.paidAmount || 0);
+                        const totalInvoiceAmount = Number(invoice.totalAmount || 0);
+                        const newPaidAmount = Number((currentPaid + paidThisPayment).toFixed(2));
+                        const newBalanceAmount = Number((totalInvoiceAmount - newPaidAmount).toFixed(2));
+                        const newInvoiceStatus = newBalanceAmount <= 0 ? "PAID" : "PARTIAL_PAID";
+
+                        await invoice.update({
+                            paidAmount: newPaidAmount,
+                            balanceAmount: newBalanceAmount < 0 ? 0 : newBalanceAmount,
+                            status: newInvoiceStatus,
+                        }, { transaction });
+                    }
+                }
+
+                const parsedApAccountId = header.apAccountId ? Number(header.apAccountId) : undefined;
+                const parsedBankAccountId = header.bankAccountId ? Number(header.bankAccountId) : undefined;
+                await GLImpactService.processPurchasePaymentPosting(
+                    createdHeader.id,
+                    companyId,
+                    user_id,
+                    undefined,
+                    parsedApAccountId,
+                    parsedBankAccountId,
+                    transaction
+                );
             }
 
             await transaction.commit();
@@ -434,6 +482,55 @@ const PurchasePaymentController = {
             for (const linePayload of preparedLines) {
                 const createdLine = await PurchasePaymentLine.create(linePayload, { transaction });
                 updatedLines.push(createdLine);
+            }
+
+            if (status === "POSTED") {
+                const invoiceMap = new Map<number, number>();
+                for (const line of updatedLines) {
+                    const invLine = await PurchaseInvoiceLine.findOne({
+                        where: { id: line.purchaseInvoiceLineId, CompanyId: companyId },
+                        include: [{ model: PurchaseInvoiceHeader, as: "invoiceHeader", required: true }],
+                        transaction,
+                    });
+                    if (invLine && (invLine as any).invoiceHeader) {
+                        const inv = (invLine as any).invoiceHeader;
+                        const currentAccum = invoiceMap.get(inv.id) || 0;
+                        invoiceMap.set(inv.id, currentAccum + Number(line.amountPaid || 0));
+                    }
+                }
+
+                if (existingPayment.purchaseInvoiceHeaderId && !invoiceMap.has(existingPayment.purchaseInvoiceHeaderId)) {
+                    invoiceMap.set(existingPayment.purchaseInvoiceHeaderId, Number(existingPayment.totalAmount || 0));
+                }
+
+                for (const [invId, paidThisPayment] of invoiceMap.entries()) {
+                    const invoice = await PurchaseInvoiceHeader.findOne({ where: { id: invId, companyId }, transaction });
+                    if (invoice) {
+                        const currentPaid = Number(invoice.paidAmount || 0);
+                        const totalInvoiceAmount = Number(invoice.totalAmount || 0);
+                        const newPaidAmount = Number((currentPaid + paidThisPayment).toFixed(2));
+                        const newBalanceAmount = Number((totalInvoiceAmount - newPaidAmount).toFixed(2));
+                        const newInvoiceStatus = newBalanceAmount <= 0 ? "PAID" : "PARTIAL_PAID";
+
+                        await invoice.update({
+                            paidAmount: newPaidAmount,
+                            balanceAmount: newBalanceAmount < 0 ? 0 : newBalanceAmount,
+                            status: newInvoiceStatus,
+                        }, { transaction });
+                    }
+                }
+
+                const parsedApAccountId = header.apAccountId ? Number(header.apAccountId) : undefined;
+                const parsedBankAccountId = header.bankAccountId ? Number(header.bankAccountId) : undefined;
+                await GLImpactService.processPurchasePaymentPosting(
+                    existingPayment.id,
+                    companyId,
+                    user_id,
+                    undefined,
+                    parsedApAccountId,
+                    parsedBankAccountId,
+                    transaction
+                );
             }
 
             await transaction.commit();
