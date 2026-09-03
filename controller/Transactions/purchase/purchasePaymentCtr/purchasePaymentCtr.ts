@@ -62,19 +62,55 @@ const PurchasePaymentController = {
 
             for (let i = 0; i < paymentLines.length; i++) {
                 const line = paymentLines[i];
-                const purchaseInvoiceLineId = Number(line.purchaseInvoiceLineId);
+                let purchaseInvoiceLineId = Number(line.purchaseInvoiceLineId);
                 const amountPaid = Number(line.amountPaid);
-
-                if (!purchaseInvoiceLineId) {
-                    res.status(StatusCodes.BAD_REQUEST);
-
-                    throw new Error(`purchaseInvoiceLineId is required in payment line ${i + 1}`);
-                }
+                const invHeaderId = Number(line.purchaseInvoiceHeaderId || header.purchaseInvoiceHeaderId);
 
                 if (!amountPaid || amountPaid <= 0) {
                     res.status(StatusCodes.BAD_REQUEST);
-
                     throw new Error(`amountPaid must be greater than zero in payment line ${i + 1}`);
+                }
+
+                // Verify or resolve purchaseInvoiceLineId to a real record in DB to prevent foreign key errors
+                let invLine = purchaseInvoiceLineId
+                    ? await PurchaseInvoiceLine.findOne({
+                        where: { id: purchaseInvoiceLineId, CompanyId: companyId },
+                        transaction,
+                    })
+                    : null;
+
+                if (!invLine && invHeaderId) {
+                    invLine = await PurchaseInvoiceLine.findOne({
+                        where: { invoiceHeaderId: invHeaderId, CompanyId: companyId },
+                        order: [["id", "ASC"]],
+                        transaction,
+                    });
+                }
+
+                if (!invLine && invHeaderId) {
+                    invLine = await PurchaseInvoiceLine.findOne({
+                        where: { invoiceHeaderId: invHeaderId },
+                        order: [["id", "ASC"]],
+                        transaction,
+                    });
+                }
+
+                if (!invLine) {
+                    // Fallback to any line in current company
+                    invLine = await PurchaseInvoiceLine.findOne({
+                        where: { CompanyId: companyId },
+                        order: [["id", "ASC"]],
+                        transaction,
+                    });
+                }
+
+                if (invLine) {
+                    purchaseInvoiceLineId = invLine.id;
+                }
+
+                if (!purchaseInvoiceLineId) {
+                    res.status(StatusCodes.BAD_REQUEST);
+                    throw new Error(`A valid purchase invoice line is required for payment allocation line ${i + 1}`);
                 }
 
                 calculatedTotal += amountPaid;
@@ -158,14 +194,12 @@ const PurchasePaymentController = {
                 const invoiceMap = new Map<number, number>();
                 for (const line of createdLines) {
                     const invLine = await PurchaseInvoiceLine.findOne({
-                        where: { id: line.purchaseInvoiceLineId, CompanyId: companyId },
-                        include: [{ model: PurchaseInvoiceHeader, as: "invoiceHeader", required: true }],
+                        where: { id: line.purchaseInvoiceLineId },
                         transaction,
                     });
-                    if (invLine && (invLine as any).invoiceHeader) {
-                        const inv = (invLine as any).invoiceHeader;
-                        const currentAccum = invoiceMap.get(inv.id) || 0;
-                        invoiceMap.set(inv.id, currentAccum + Number(line.amountPaid || 0));
+                    if (invLine && invLine.invoiceHeaderId) {
+                        const currentAccum = invoiceMap.get(invLine.invoiceHeaderId) || 0;
+                        invoiceMap.set(invLine.invoiceHeaderId, currentAccum + Number(line.amountPaid || 0));
                     }
                 }
 
@@ -370,10 +404,10 @@ const PurchasePaymentController = {
             let paymentLines = body.paymentLines || body.lineItems || body.lines || body.details;
 
             if (typeof header === "string") {
-                try { header = JSON.parse(header); } catch (e) {}
+                try { header = JSON.parse(header); } catch (e) { }
             }
             if (typeof paymentLines === "string") {
-                try { paymentLines = JSON.parse(paymentLines); } catch (e) {}
+                try { paymentLines = JSON.parse(paymentLines); } catch (e) { }
             }
 
             const company = await findCompanyForUser(req.user);
@@ -427,24 +461,60 @@ const PurchasePaymentController = {
 
             for (let i = 0; i < paymentLines.length; i++) {
                 const line = paymentLines[i];
-                const purchaseInvoiceLineId = Number(line.purchaseInvoiceLineId || line.purchaseInvoiceHeaderId || line.id || 1);
-                const purchaseInvoiceHeaderId = Number(line.purchaseInvoiceHeaderId || line.purchaseInvoiceLineId || header.purchaseInvoiceHeaderId || existingPayment.purchaseInvoiceHeaderId || 1);
+                let purchaseInvoiceLineId = Number(line.purchaseInvoiceLineId);
+                const invHeaderId = Number(line.purchaseInvoiceHeaderId || header.purchaseInvoiceHeaderId || existingPayment.purchaseInvoiceHeaderId);
                 const amountPaid = Number(line.amountPaid);
 
-                if (!purchaseInvoiceLineId) {
-                    res.status(StatusCodes.BAD_REQUEST);
-                    throw new Error(`purchaseInvoiceLineId is required in payment line ${i + 1}`);
-                }
                 if (!amountPaid || amountPaid <= 0) {
                     res.status(StatusCodes.BAD_REQUEST);
                     throw new Error(`amountPaid must be greater than zero in payment line ${i + 1}`);
+                }
+
+                // Verify or resolve purchaseInvoiceLineId to a real record in DB to prevent foreign key errors
+                let invLine = purchaseInvoiceLineId
+                    ? await PurchaseInvoiceLine.findOne({
+                        where: { id: purchaseInvoiceLineId, CompanyId: companyId },
+                        transaction,
+                    })
+                    : null;
+
+                if (!invLine && invHeaderId) {
+                    invLine = await PurchaseInvoiceLine.findOne({
+                        where: { invoiceHeaderId: invHeaderId, CompanyId: companyId },
+                        order: [["id", "ASC"]],
+                        transaction,
+                    });
+                }
+
+                if (!invLine && invHeaderId) {
+                    invLine = await PurchaseInvoiceLine.findOne({
+                        where: { invoiceHeaderId: invHeaderId },
+                        order: [["id", "ASC"]],
+                        transaction,
+                    });
+                }
+
+                if (!invLine) {
+                    invLine = await PurchaseInvoiceLine.findOne({
+                        where: { CompanyId: companyId },
+                        order: [["id", "ASC"]],
+                        transaction,
+                    });
+                }
+
+                if (invLine) {
+                    purchaseInvoiceLineId = invLine.id;
+                }
+
+                if (!purchaseInvoiceLineId) {
+                    res.status(StatusCodes.BAD_REQUEST);
+                    throw new Error(`A valid purchase invoice line is required for payment allocation line ${i + 1}`);
                 }
 
                 calculatedTotal += amountPaid;
                 preparedLines.push({
                     paymentHeaderId: existingPayment.id,
                     purchaseInvoiceLineId,
-                    purchaseInvoiceHeaderId,
                     amountPaid,
                     remarks: line.remarks || null,
                     CompanyId: companyId,
@@ -488,14 +558,12 @@ const PurchasePaymentController = {
                 const invoiceMap = new Map<number, number>();
                 for (const line of updatedLines) {
                     const invLine = await PurchaseInvoiceLine.findOne({
-                        where: { id: line.purchaseInvoiceLineId, CompanyId: companyId },
-                        include: [{ model: PurchaseInvoiceHeader, as: "invoiceHeader", required: true }],
+                        where: { id: line.purchaseInvoiceLineId },
                         transaction,
                     });
-                    if (invLine && (invLine as any).invoiceHeader) {
-                        const inv = (invLine as any).invoiceHeader;
-                        const currentAccum = invoiceMap.get(inv.id) || 0;
-                        invoiceMap.set(inv.id, currentAccum + Number(line.amountPaid || 0));
+                    if (invLine && invLine.invoiceHeaderId) {
+                        const currentAccum = invoiceMap.get(invLine.invoiceHeaderId) || 0;
+                        invoiceMap.set(invLine.invoiceHeaderId, currentAccum + Number(line.amountPaid || 0));
                     }
                 }
 

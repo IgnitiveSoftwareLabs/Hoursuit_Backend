@@ -501,27 +501,17 @@ export const GLImpactService = {
 
     const lines: GLLineInput[] = [];
     let totalGrossSum = 0;
-    let totalDiscountSum = 0;
-    let totalTaxSum = 0;
     const grnLines = ((grn as any).lineItems || []) as any[];
 
     for (const lineItem of grnLines) {
       const pol = lineItem.purchaseOrderLine;
-      const poQty = Number(pol?.quantity || lineItem.orderedQty || 1);
       const unitRate = Number(pol?.rate || lineItem.unitPrice || lineItem.rate || 0);
       const qty = Number(lineItem.acceptedQty > 0 ? lineItem.acceptedQty : lineItem.receivedQty);
 
       if (qty <= 0) continue;
 
       const grossAmount = Number((qty * unitRate).toFixed(2));
-      const discPerUnit = poQty > 0 ? Number(pol?.discount_amount || 0) / poQty : 0;
-      const lineDiscount = Number((qty * discPerUnit).toFixed(2));
-      const taxPerUnit = poQty > 0 ? Number(pol?.tax_amount || 0) / poQty : 0;
-      const lineTax = Number((qty * taxPerUnit).toFixed(2));
-
       totalGrossSum += grossAmount;
-      totalDiscountSum += lineDiscount;
-      totalTaxSum += lineTax;
 
       const item = lineItem.item as ItemMaster | undefined;
 
@@ -539,42 +529,18 @@ export const GLImpactService = {
         credit_amount: 0,
         narration: `Stock Inward: ${item.item_name} (Qty: ${qty} @ ₹${unitRate.toFixed(2)})`
       });
-
-      // 2. CREDIT: Purchase Discount Account (if discount exists)
-      if (lineDiscount > 0) {
-        const discountAccountId = await resolvePurchaseDiscountAccount(companyId, undefined, transaction);
-        const discountAccountName = await resolveAccountName(discountAccountId, transaction);
-        lines.push({
-          account_id: discountAccountId,
-          debit_amount: 0,
-          credit_amount: lineDiscount,
-          narration: `Purchase Discount: ${item.item_name} [A/C: ${discountAccountName}] (Qty: ${qty})`
-        });
-      }
-
-      // 3. DEBIT: Input Tax (GST) Account (if tax exists)
-      if (lineTax > 0) {
-        const taxAccountId = await resolveInputTaxAccount(companyId, undefined, transaction);
-        const taxAccountName = await resolveAccountName(taxAccountId, transaction);
-        lines.push({
-          account_id: taxAccountId,
-          debit_amount: lineTax,
-          credit_amount: 0,
-          narration: `Input Tax (GST): ${item.item_name} [A/C: ${taxAccountName}] (Qty: ${qty})`
-        });
-      }
     }
 
-    // 4. CREDIT: GRNI / Accrued Purchases Liability Account (Net GRN Value: Gross - Discount + Tax)
-    const netGRNLiability = Number((totalGrossSum - totalDiscountSum + totalTaxSum).toFixed(2));
-    if (netGRNLiability > 0) {
+    // 2. CREDIT: GRNI / Accrued Purchases Liability Account (No discount, no tax on GRN)
+    totalGrossSum = Number(totalGrossSum.toFixed(2));
+    if (totalGrossSum > 0) {
       const creditAccountId = await resolveGRNIAccount(companyId, grniAccountId, transaction);
       const grniAccountName = await resolveAccountName(creditAccountId, transaction);
 
       lines.push({
         account_id: creditAccountId,
         debit_amount: 0,
-        credit_amount: netGRNLiability,
+        credit_amount: totalGrossSum,
         narration: `Accrued Purchase Liability - GRN #${(grn as any).grnNo || grn.id} [A/C: ${grniAccountName}]`
       });
     }
@@ -1188,31 +1154,18 @@ export const GLImpactService = {
     const clearingAccountName = await resolveAccountName(resolvedClearingAccountId, transaction);
 
     const cLines = ((credit as any).creditLines || []) as any[];
-    let subtotalValue = 0;
-    let lineDiscountValue = 0;
     let lineTaxValue = 0;
     for (const cLine of cLines) {
-      const qty = Number(cLine.creditQty || 0);
-      const price = Number(cLine.unitPrice || 0);
-      subtotalValue += Number((qty * price).toFixed(2));
-      lineDiscountValue += Number(cLine.discountAmount || 0);
       lineTaxValue += Number(cLine.taxAmount || 0);
     }
-    subtotalValue = Number(subtotalValue.toFixed(2));
-    lineDiscountValue = Number(lineDiscountValue.toFixed(2));
     lineTaxValue = Number(lineTaxValue.toFixed(2));
 
-    const headerSubtotal = Number(credit.subtotal || 0);
-    const headerDiscount = Number(credit.discountAmount || 0);
     const headerTax = Number(credit.taxAmount || 0);
-
-    const finalSubtotal = headerSubtotal > 0 ? headerSubtotal : (subtotalValue > 0 ? subtotalValue : totalValue);
-    const finalDiscount = headerDiscount > 0 ? headerDiscount : lineDiscountValue;
     const finalTax = headerTax > 0 ? headerTax : lineTaxValue;
 
     const lines: GLLineInput[] = [];
 
-    // 1. DEBIT: Accounts Payable Account (Reduces vendor liability by total net amount)
+    // 1. DEBIT: Accounts Payable Account (Reduces vendor liability by total net credit amount)
     lines.push({
       account_id: resolvedApAccountId,
       debit_amount: totalValue,
@@ -1220,13 +1173,29 @@ export const GLImpactService = {
       narration: `Vendor Credit AP Reduction: Note #${credit.creditNoteNumber} [A/C: ${apAccountName}]`
     });
 
-    // 2. CREDIT: Purchase Return Clearing Account (Clears return fulfillment accrual for full credit value, no tax line)
-    lines.push({
-      account_id: resolvedClearingAccountId,
-      debit_amount: 0,
-      credit_amount: totalValue,
-      narration: `Vendor Credit Clearing Offset: Note #${credit.creditNoteNumber} [A/C: ${clearingAccountName}]`
-    });
+    // 2. CREDIT: Input Tax (GST) Reversal Account (if GST exists)
+    if (finalTax > 0) {
+      const resolvedTaxAccountId = await resolveInputTaxAccount(companyId, undefined, transaction);
+      const taxAccountName = await resolveAccountName(resolvedTaxAccountId, transaction);
+
+      lines.push({
+        account_id: resolvedTaxAccountId,
+        debit_amount: 0,
+        credit_amount: finalTax,
+        narration: `Input Tax (GST) Reversal: Note #${credit.creditNoteNumber} [A/C: ${taxAccountName}]`
+      });
+    }
+
+    // 3. CREDIT: Purchase Return Clearing Account (Clears return fulfillment accrual: totalValue - finalTax)
+    const clearingAmount = Number((totalValue - (finalTax > 0 ? finalTax : 0)).toFixed(2));
+    if (clearingAmount > 0) {
+      lines.push({
+        account_id: resolvedClearingAccountId,
+        debit_amount: 0,
+        credit_amount: clearingAmount,
+        narration: `Vendor Credit Clearing Offset: Note #${credit.creditNoteNumber} [A/C: ${clearingAccountName}]`
+      });
+    }
 
     return lines;
   },
