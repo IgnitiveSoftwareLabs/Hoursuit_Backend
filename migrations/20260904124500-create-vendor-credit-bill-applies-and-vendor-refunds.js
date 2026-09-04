@@ -131,7 +131,7 @@ module.exports = {
           type: DataTypes.INTEGER,
           allowNull: true,
           references: {
-            model: 'chart_of_account_masters',
+            model: 'chart_of_accounts',
             key: 'id',
           },
           onUpdate: 'CASCADE',
