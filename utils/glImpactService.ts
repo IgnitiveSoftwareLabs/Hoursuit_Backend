@@ -1,3 +1,32 @@
+export const combineGLLines = (lines: GLLineInput[]): GLLineInput[] => {
+  const combinedMap = new Map<string, GLLineInput>();
+
+  for (const line of lines) {
+    const isDebit = Number(line.debit_amount || 0) > 0;
+    const isCredit = Number(line.credit_amount || 0) > 0;
+    const side = isDebit ? "DEBIT" : isCredit ? "CREDIT" : "ZERO";
+    const key = `${line.account_id}_${side}`;
+
+    if (combinedMap.has(key)) {
+      const existing = combinedMap.get(key)!;
+      existing.debit_amount = Number((Number(existing.debit_amount || 0) + Number(line.debit_amount || 0)).toFixed(2));
+      existing.credit_amount = Number((Number(existing.credit_amount || 0) + Number(line.credit_amount || 0)).toFixed(2));
+      if (line.narration && !existing.narration?.includes(line.narration)) {
+        existing.narration = `${existing.narration}; ${line.narration}`;
+      }
+    } else {
+      combinedMap.set(key, {
+        account_id: line.account_id,
+        debit_amount: Number(Number(line.debit_amount || 0).toFixed(2)),
+        credit_amount: Number(Number(line.credit_amount || 0).toFixed(2)),
+        narration: line.narration,
+      });
+    }
+  }
+
+  return Array.from(combinedMap.values());
+};
+
 import { Op, Transaction } from "sequelize";
 import { AccountingService, GLLineInput } from "./accounting";
 import { resolveAccountName } from "./resolveAccounts";
@@ -8,11 +37,13 @@ import { PurchaseReturnHeader, PurchaseReturnLine } from "../modals/Transactions
 import PurchaseReturnFulfillmentHeader from "../modals/Transactions/purchase/purchaseReturn/purchaseReturnFulfillmentHeader";
 import PurchaseReturnFulfillmentLine from "../modals/Transactions/purchase/purchaseReturn/purchaseReturnFulfillmentLine";
 import VendorCreditHeader from "../modals/Transactions/purchase/vendorCredit/vendorCreditHeader";
+import VendorRefundHeader from "../modals/Transactions/purchase/vendorRefund/vendorRefundHeader";
 import VendorCreditLine from "../modals/Transactions/purchase/vendorCredit/vendorCreditLine";
 import PurchaseOrderLine from "../modals/Transactions/purchase/purchaseOrder/purchaseOrderLine";
 import { GRN, GRNLine } from "../modals/Transactions/purchase/GRN";
 import ItemMaster from "../modals/masters/items/itemMaster";
 import ChartOfAccountMaster from "../modals/masters/chartOfAccount/chartOfAccount";
+import VendorDetails from "../modals/masters/vendorDetails/vendorDetails";
 
 /**
  * Helper function to dynamically resolve Inventory Asset Account
@@ -235,8 +266,10 @@ const resolvePurchaseReturnClearingAccount = async (
       CompanyId: companyId,
       isActive: true,
       [Op.or]: [
+        { account_name: { [Op.like]: "%Vendor Return / Inventory Adjustment%" } },
+        { account_name: { [Op.like]: "%Inventory Adjustment%" } },
+        { account_name: { [Op.like]: "%Vendor Return%" } },
         { account_name: { [Op.like]: "%Purchase Return Clearing%" } },
-        { account_name: { [Op.like]: "%Vendor Return Clearing%" } },
         { account_name: { [Op.like]: "%Return Clearing%" } },
         { account_name: { [Op.like]: "%Purchase Return%" } },
       ],
@@ -1064,7 +1097,7 @@ export const GLImpactService = {
         account_id: debitAccountId,
         debit_amount: totalValue,
         credit_amount: 0,
-        narration: `Purchase Return Clearing: Fulfillment #${fulfillment.fulfillmentNumber} [A/C: ${clearingAccountName}]`
+        narration: `Vendor Return / Inventory Adjustment: Fulfillment #${fulfillment.fulfillmentNumber} [A/C: ${clearingAccountName}]`
       });
     }
 
@@ -1117,11 +1150,10 @@ export const GLImpactService = {
   /**
    * Calculates Debit/Credit impact for Vendor Credit (Vendor Credit Note)
    *
-   * NetSuite Double-Entry Accounting Rules:
-   *   DEBIT  : Accounts Payable Account (reduces vendor liability by total net amount)
-   *   DEBIT  : Purchase Discount Reversal Account (if discount was previously received)
-   *   CREDIT : Purchase Return Clearing Account (clears temporary return fulfillment accrual)
-   *   CREDIT : Input Tax (GST) Reversal Account (reverses previously claimed input tax)
+   * Accounting Rules:
+   *   DEBIT  : Accounts Payable Account (reduces vendor liability by total amount)
+   *   CREDIT : Inventory Account (Inventory subtotal amount)
+   *   CREDIT : Input GST Account (Input tax amount)
    */
   calculateVendorCreditImpact: async (
     creditId: number,
@@ -1151,7 +1183,6 @@ export const GLImpactService = {
     const apAccountName = await resolveAccountName(resolvedApAccountId, transaction);
 
     const resolvedClearingAccountId = await resolvePurchaseReturnClearingAccount(companyId, clearingAccountId, transaction);
-    const clearingAccountName = await resolveAccountName(resolvedClearingAccountId, transaction);
 
     const cLines = ((credit as any).creditLines || []) as any[];
     let lineTaxValue = 0;
@@ -1165,15 +1196,35 @@ export const GLImpactService = {
 
     const lines: GLLineInput[] = [];
 
-    // 1. DEBIT: Accounts Payable Account (Reduces vendor liability by total net credit amount)
+    // 1. DEBIT: Accounts Payable Account (Reduces vendor liability by total amount)
     lines.push({
       account_id: resolvedApAccountId,
       debit_amount: totalValue,
       credit_amount: 0,
-      narration: `Vendor Credit AP Reduction: Note #${credit.creditNoteNumber} [A/C: ${apAccountName}]`
+      narration: `Accounts Payable: Note #${credit.creditNoteNumber} [A/C: ${apAccountName}]`
     });
 
-    // 2. CREDIT: Input Tax (GST) Reversal Account (if GST exists)
+    // 2. CREDIT: Inventory Account (totalValue - finalTax)
+    const inventoryAmount = Number((totalValue - (finalTax > 0 ? finalTax : 0)).toFixed(2));
+    if (inventoryAmount > 0) {
+      let resolvedInventoryAccountId = resolvedClearingAccountId;
+      const firstItem = cLines.find((l) => l.item)?.item;
+      if (firstItem) {
+        try {
+          resolvedInventoryAccountId = await resolveInventoryAssetAccount(companyId, firstItem, transaction);
+        } catch (e) {}
+      }
+      const inventoryAccountName = await resolveAccountName(resolvedInventoryAccountId, transaction);
+
+      lines.push({
+        account_id: resolvedInventoryAccountId,
+        debit_amount: 0,
+        credit_amount: inventoryAmount,
+        narration: `Inventory Credit: Note #${credit.creditNoteNumber} [A/C: ${inventoryAccountName}]`
+      });
+    }
+
+    // 3. CREDIT: Input GST Reversal Account (if GST exists)
     if (finalTax > 0) {
       const resolvedTaxAccountId = await resolveInputTaxAccount(companyId, undefined, transaction);
       const taxAccountName = await resolveAccountName(resolvedTaxAccountId, transaction);
@@ -1182,18 +1233,7 @@ export const GLImpactService = {
         account_id: resolvedTaxAccountId,
         debit_amount: 0,
         credit_amount: finalTax,
-        narration: `Input Tax (GST) Reversal: Note #${credit.creditNoteNumber} [A/C: ${taxAccountName}]`
-      });
-    }
-
-    // 3. CREDIT: Purchase Return Clearing Account (Clears return fulfillment accrual: totalValue - finalTax)
-    const clearingAmount = Number((totalValue - (finalTax > 0 ? finalTax : 0)).toFixed(2));
-    if (clearingAmount > 0) {
-      lines.push({
-        account_id: resolvedClearingAccountId,
-        debit_amount: 0,
-        credit_amount: clearingAmount,
-        narration: `Vendor Credit Clearing Offset: Note #${credit.creditNoteNumber} [A/C: ${clearingAccountName}]`
+        narration: `Input GST: Note #${credit.creditNoteNumber} [A/C: ${taxAccountName}]`
       });
     }
 
@@ -1244,5 +1284,123 @@ export const GLImpactService = {
       transaction
     );
   }
-};
+,
 
+  /**
+   * Calculates GL Impact for Vendor Refund (DR Bank Account, CR Accounts Payable)
+   */
+  calculateVendorRefundImpact: async (
+    refundId: number,
+    companyId: number,
+    bankAccountId?: number,
+    apAccountId?: number,
+    transaction?: Transaction
+  ): Promise<GLLineInput[]> => {
+    const refund = await VendorRefundHeader.findOne({
+      where: { id: refundId, companyId },
+      include: [
+        { model: VendorCreditHeader, as: "vendorCredit" },
+        { model: VendorDetails, as: "vendor" },
+      ],
+      transaction,
+    });
+
+    if (!refund) throw new Error(`Vendor Refund #${refundId} not found`);
+
+    const refundAmount = Number(Number(refund.refundAmount || 0).toFixed(2));
+    if (refundAmount <= 0) return [];
+
+    const lines: GLLineInput[] = [];
+
+    // 1. DEBIT: Bank / Cash Account
+    let debitAccountId = refund.bankAccountId || bankAccountId;
+    if (!debitAccountId) {
+      const bankAccount = await ChartOfAccountMaster.findOne({
+        where: { CompanyId: companyId, isActive: true },
+        include: [
+          {
+            association: "accountType",
+            where: {
+              account_type_name: {
+                [Op.or]: [
+                  { [Op.like]: "%Bank%" },
+                  { [Op.like]: "%Cash%" },
+                  { [Op.like]: "%Asset%" },
+                ],
+              },
+            },
+          },
+        ],
+        transaction,
+      });
+      debitAccountId = bankAccount?.id || 1;
+    }
+
+    const bankAccountName = await resolveAccountName(debitAccountId, transaction);
+
+    lines.push({
+      account_id: debitAccountId,
+      debit_amount: refundAmount,
+      credit_amount: 0,
+      narration: `Vendor Refund Receipt: #${refund.refundNumber} [A/C: ${bankAccountName}]`,
+    });
+
+    // 2. CREDIT: Accounts Payable
+    const creditAccountId = apAccountId || (await resolveAPAccount(companyId, apAccountId, transaction));
+    const apAccountName = await resolveAccountName(creditAccountId, transaction);
+
+    lines.push({
+      account_id: creditAccountId,
+      debit_amount: 0,
+      credit_amount: refundAmount,
+      narration: `Vendor Refund AP Restoration: #${refund.refundNumber} [A/C: ${apAccountName}]`,
+    });
+
+    return combineGLLines(lines);
+  },
+
+  /**
+   * Posts the calculated Vendor Refund impact into GL via AccountingService
+   */
+  processVendorRefundPosting: async (
+    refundId: number,
+    companyId: number,
+    userId: number,
+    voucherTypeId?: number,
+    bankAccountId?: number,
+    apAccountId?: number,
+    transaction?: Transaction
+  ) => {
+    const refund = await VendorRefundHeader.findByPk(refundId, { transaction });
+    if (!refund) throw new Error(`Vendor Refund #${refundId} not found`);
+
+    const lines = await GLImpactService.calculateVendorRefundImpact(
+      refundId,
+      companyId,
+      bankAccountId,
+      apAccountId,
+      transaction
+    );
+
+    if (lines.length === 0) return null;
+
+    const refundNo = refund.refundNumber || `VR-${refund.id}`;
+    const refundDate = refund.refundDate ? new Date(refund.refundDate) : new Date();
+
+    return await AccountingService.createAndPostJournalEntry(
+      {
+        companyId,
+        userId,
+        entryNo: `JE-VR-${refundNo}`,
+        voucherTypeId,
+        sourceId: refundId,
+        sourceName: "VendorRefund",
+        referenceNo: refundNo,
+        narration: `GL Impact posting for Vendor Refund #${refundNo}`,
+        entryDate: refundDate,
+        lines,
+      },
+      transaction
+    );
+  }
+};

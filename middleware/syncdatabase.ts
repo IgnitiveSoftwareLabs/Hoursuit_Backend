@@ -12,6 +12,8 @@ import PurchaseReturnFulfillmentHeader from "../modals/Transactions/purchase/pur
 import PurchaseReturnFulfillmentLine from "../modals/Transactions/purchase/purchaseReturn/purchaseReturnFulfillmentLine";
 import VendorCreditHeader from "../modals/Transactions/purchase/vendorCredit/vendorCreditHeader";
 import VendorCreditLine from "../modals/Transactions/purchase/vendorCredit/vendorCreditLine";
+import VendorCreditBillApply from "../modals/Transactions/purchase/vendorCredit/vendorCreditBillApply";
+import VendorRefundHeader from "../modals/Transactions/purchase/vendorRefund/vendorRefundHeader";
 import { DeliveryChallanHeader, DeliveryChallanLine } from "../modals/Transactions/sales/deliveryChallan";
 import { PurchaseOrder, PurchaseOrderLine } from "../modals/Transactions/purchase/purchaseOrder";
 import { SalesReturnHeader, SalesReturnLine } from "../modals/Transactions/sales/salesReturn";
@@ -128,14 +130,29 @@ async function syncdatabase() {
   await PurchasePaymentHeader.sync();
   await PurchasePaymentLine.sync();
 
-  await PurchaseReturnHeader.sync();
-  await PurchaseReturnLine.sync();
+  await PurchaseReturnHeader.sync({ alter: true });
+  await PurchaseReturnLine.sync({ alter: true });
 
-  await PurchaseReturnFulfillmentHeader.sync();
-  await PurchaseReturnFulfillmentLine.sync();
+  await PurchaseReturnFulfillmentHeader.sync({ alter: true });
+  await PurchaseReturnFulfillmentLine.sync({ alter: true });
 
-  await VendorCreditHeader.sync();
-  await VendorCreditLine.sync();
+  // Ensure missing columns exist in PostgreSQL if table was previously created
+  try {
+    await sequelize.query(`
+      ALTER TABLE IF EXISTS vendor_credit_headers ADD COLUMN IF NOT EXISTS "appliedAmount" NUMERIC(15, 4) DEFAULT 0;
+      ALTER TABLE IF EXISTS vendor_credit_headers ADD COLUMN IF NOT EXISTS "refundedAmount" NUMERIC(15, 4) DEFAULT 0;
+      ALTER TABLE IF EXISTS purchase_return_headers ADD COLUMN IF NOT EXISTS "discountAmount" NUMERIC(18, 2) DEFAULT 0;
+      ALTER TABLE IF EXISTS purchase_return_headers ADD COLUMN IF NOT EXISTS "taxAmount" NUMERIC(18, 2) DEFAULT 0;
+      ALTER TABLE IF EXISTS purchase_return_headers ADD COLUMN IF NOT EXISTS "totalAmount" NUMERIC(18, 2) DEFAULT 0;
+    `);
+  } catch (err) {
+    console.warn("Could not execute column alter queries:", err);
+  }
+
+  await VendorCreditHeader.sync({ alter: true });
+  await VendorCreditLine.sync({ alter: true });
+  await VendorCreditBillApply.sync({ alter: true });
+  await VendorRefundHeader.sync({ alter: true });
 
   await QualityInspectionHeader.sync();
   await QualityInspectionLine.sync();

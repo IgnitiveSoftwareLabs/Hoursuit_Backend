@@ -20,6 +20,8 @@ export interface VendorCreditHeaderAttributes {
     discountAmount?: number | null;
     taxAmount?: number | null;
     totalAmount: number;
+    appliedAmount?: number | null;
+    refundedAmount?: number | null;
     status: "DRAFT" | "POSTED" | "CANCELLED";
     remarks?: string | null;
     user_id: number;
@@ -63,6 +65,8 @@ export class VendorCreditHeader
     public discountAmount!: number | null;
     public taxAmount!: number | null;
     public totalAmount!: number;
+    public appliedAmount!: number | null;
+    public refundedAmount!: number | null;
     public status!: "DRAFT" | "POSTED" | "CANCELLED";
     public remarks!: string | null;
     public user_id!: number;
@@ -124,6 +128,16 @@ VendorCreditHeader.init(
         totalAmount: {
             type: DataTypes.DECIMAL(15, 4),
             allowNull: false,
+            defaultValue: 0,
+        },
+        appliedAmount: {
+            type: DataTypes.DECIMAL(15, 4),
+            allowNull: true,
+            defaultValue: 0,
+        },
+        refundedAmount: {
+            type: DataTypes.DECIMAL(15, 4),
+            allowNull: true,
             defaultValue: 0,
         },
         status: {

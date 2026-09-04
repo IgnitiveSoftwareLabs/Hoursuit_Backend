@@ -170,61 +170,49 @@ const JournalEntryController = {
       throw new Error("Unauthorized: Company not found for user");
     }
 
-    const sourceMap: Record<string, string[]> = {
-      purchaseinvoice: ["PurchaseInvoice", "PURCHASE_INVOICE", "Purchase_Invoice", "Purchase Invoice"],
-      purchasepayment: ["PurchasePayment", "PURCHASE_PAYMENT", "Purchase_Payment", "Purchase Payment"],
-      purchasereturn: ["PurchaseReturn", "PURCHASE_RETURN", "Purchase_Return", "Purchase Return", "PurchaseReturnFulfillment", "ReturnFulfillment", "VendorCredit", "VENDOR_CREDIT"],
-      purchasereturnfulfillment: ["PurchaseReturnFulfillment", "ReturnFulfillment", "PURCHASE_RETURN_FULFILLMENT"],
-      returnfulfillment: ["PurchaseReturnFulfillment", "ReturnFulfillment", "PURCHASE_RETURN_FULFILLMENT"],
-      vendorcredit: ["VendorCredit", "VENDOR_CREDIT", "Vendor_Credit", "Vendor Credit"],
-      grn: ["GRN", "Grn", "grn"],
-      debitnote: ["DebitNote", "Debit_Note", "Debit Note"],
-    };
-
     const normalizedKey = String(source || "").toLowerCase().replace(/[\s_]/g, "");
-    const possibleSourceNames = sourceMap[normalizedKey] || [source];
 
-    let targetSourceIds: number[] = [Number(id)];
-
-    if (
-      normalizedKey === "purchasereturn" ||
-      normalizedKey === "purchasereturnfulfillment" ||
-      normalizedKey === "vendorcredit" ||
-      normalizedKey === "returnfulfillment"
-    ) {
-      // Find linked fulfillments and vendor credits for this return header or fulfillment/credit ID
-      const fulfillments = await PurchaseReturnFulfillmentHeader.findAll({
-        where: {
-          [Op.or]: [{ purchaseReturnHeaderId: Number(id) }, { id: Number(id) }],
-          companyId: company.id,
-        },
-        attributes: ["id"],
-      });
-      const fIds = fulfillments.map((f: any) => f.id);
-
-      const vendorCredits = await VendorCreditHeader.findAll({
-        where: {
-          [Op.or]: [{ purchaseReturnHeaderId: Number(id) }, { id: Number(id) }],
-          companyId: company.id,
-        },
-        attributes: ["id"],
-      });
-      const vcIds = vendorCredits.map((vc: any) => vc.id);
-
-      targetSourceIds = Array.from(new Set([Number(id), ...fIds, ...vcIds]));
-    }
-
-    const whereClause: any = {
+    let whereClause: any = {
       CompanyId: company.id,
-      [Op.or]: [
-        {
-          source_id: { [Op.in]: targetSourceIds },
-          source_name: { [Op.in]: possibleSourceNames },
-        },
-      ],
     };
 
-    if (normalizedKey === "purchaseinvoice") {
+    if (normalizedKey === "vendorcredit" || normalizedKey === "debitnote") {
+      whereClause = {
+        CompanyId: company.id,
+        source_id: Number(id),
+        [Op.or]: [
+          { source_name: { [Op.in]: ["VendorCredit", "VENDOR_CREDIT", "Vendor_Credit", "Vendor Credit"] } },
+          { entry_no: { [Op.like]: "JE-VC-%" } },
+        ],
+      };
+    } else if (normalizedKey === "purchasereturnfulfillment" || normalizedKey === "returnfulfillment") {
+      whereClause = {
+        CompanyId: company.id,
+        source_id: Number(id),
+        [Op.or]: [
+          { source_name: { [Op.in]: ["PurchaseReturnFulfillment", "ReturnFulfillment", "PURCHASE_RETURN_FULFILLMENT"] } },
+          { entry_no: { [Op.like]: "JE-PRF-%" } },
+        ],
+      };
+    } else if (normalizedKey === "vendorrefund") {
+      whereClause = {
+        CompanyId: company.id,
+        source_id: Number(id),
+        [Op.or]: [
+          { source_name: { [Op.in]: ["VendorRefund", "VENDOR_REFUND", "Vendor_Refund", "Vendor Refund"] } },
+          { entry_no: { [Op.like]: "JE-VR-%" } },
+        ],
+      };
+    } else if (normalizedKey === "grn") {
+      whereClause = {
+        CompanyId: company.id,
+        source_id: Number(id),
+        [Op.or]: [
+          { source_name: { [Op.in]: ["GRN", "Grn", "grn"] } },
+          { entry_no: { [Op.like]: "JE-GRN-%" } },
+        ],
+      };
+    } else if (normalizedKey === "purchaseinvoice") {
       const invoice = await PurchaseInvoiceHeader.findOne({
         where: { id: Number(id), companyId: company.id },
       });
@@ -236,14 +224,14 @@ const JournalEntryController = {
         });
         return;
       }
-      whereClause[Op.or].push({
-        source_id: { [Op.in]: targetSourceIds },
-        entry_no: { [Op.like]: "JE-INV-%" },
-      });
-      whereClause[Op.or].push({
-        source_id: { [Op.in]: targetSourceIds },
-        narration: { [Op.like]: "%Purchase Invoice%" },
-      });
+      whereClause = {
+        CompanyId: company.id,
+        source_id: Number(id),
+        [Op.or]: [
+          { source_name: { [Op.in]: ["PurchaseInvoice", "PURCHASE_INVOICE", "Purchase_Invoice", "Purchase Invoice"] } },
+          { entry_no: { [Op.like]: "JE-INV-%" } },
+        ],
+      };
     } else if (normalizedKey === "purchasepayment") {
       const payment = await PurchasePaymentHeader.findOne({
         where: { id: Number(id), companyId: company.id },
@@ -256,40 +244,52 @@ const JournalEntryController = {
         });
         return;
       }
-      whereClause[Op.or].push({
-        source_id: { [Op.in]: targetSourceIds },
-        entry_no: { [Op.like]: "JE-PAY-%" },
+      whereClause = {
+        CompanyId: company.id,
+        source_id: Number(id),
+        [Op.or]: [
+          { source_name: { [Op.in]: ["PurchasePayment", "PURCHASE_PAYMENT", "Purchase_Payment", "Purchase Payment"] } },
+          { entry_no: { [Op.like]: "JE-PAY-%" } },
+        ],
+      };
+    } else if (normalizedKey === "purchasereturn") {
+      const fulfillments = await PurchaseReturnFulfillmentHeader.findAll({
+        where: { purchaseReturnHeaderId: Number(id), companyId: company.id },
+        attributes: ["id"],
       });
-      whereClause[Op.or].push({
-        source_id: { [Op.in]: targetSourceIds },
-        narration: { [Op.like]: "%Purchase Payment%" },
+      const fIds = fulfillments.map((f: any) => f.id);
+
+      const vendorCredits = await VendorCreditHeader.findAll({
+        where: { purchaseReturnHeaderId: Number(id), companyId: company.id },
+        attributes: ["id"],
       });
-    } else if (
-      normalizedKey === "purchasereturn" ||
-      normalizedKey === "purchasereturnfulfillment" ||
-      normalizedKey === "vendorcredit" ||
-      normalizedKey === "returnfulfillment"
-    ) {
-      whereClause[Op.or].push({
-        source_id: { [Op.in]: targetSourceIds },
-        entry_no: { [Op.like]: "JE-PRF-%" },
-      });
-      whereClause[Op.or].push({
-        source_id: { [Op.in]: targetSourceIds },
-        entry_no: { [Op.like]: "JE-VC-%" },
-      });
-      whereClause[Op.or].push({
-        source_id: { [Op.in]: targetSourceIds },
-        entry_no: { [Op.like]: "JE-RET-%" },
-      });
-      whereClause[Op.or].push({
-        source_id: { [Op.in]: targetSourceIds },
-        narration: { [Op.like]: "%Purchase Return%" },
-      });
-      whereClause[Op.or].push({
-        source_id: { [Op.in]: targetSourceIds },
-        narration: { [Op.like]: "%Vendor Credit%" },
-      });
+      const vcIds = vendorCredits.map((vc: any) => vc.id);
+
+      const targetSourceIds = Array.from(new Set([Number(id), ...fIds, ...vcIds]));
+
+      whereClause = {
+        CompanyId: company.id,
+        [Op.or]: [
+          {
+            source_id: { [Op.in]: targetSourceIds },
+            source_name: { [Op.in]: ["PurchaseReturn", "PURCHASE_RETURN", "PurchaseReturnFulfillment", "VendorCredit"] },
+          },
+          {
+            source_id: { [Op.in]: targetSourceIds },
+            entry_no: { [Op.like]: "JE-PRF-%" },
+          },
+          {
+            source_id: { [Op.in]: targetSourceIds },
+            entry_no: { [Op.like]: "JE-VC-%" },
+          },
+        ],
+      };
+    } else {
+      whereClause = {
+        CompanyId: company.id,
+        source_id: Number(id),
+        source_name: source,
+      };
     }
 
     const entries = await JournalEntryHeader.findAll({
@@ -321,16 +321,69 @@ const JournalEntryController = {
       return;
     }
 
+    // Combine lines by account and debit/credit side
+    const groupLinesByAccount = (rawLines: any[]) => {
+      const map = new Map<string, any>();
+      for (const line of rawLines) {
+        const isTaxLine = (line.narration || "").toLowerCase().includes("gst") || (line.narration || "").toLowerCase().includes("tax");
+        const isFulfillmentDebit = (line.narration || "").toLowerCase().includes("fulfillment") || (line.narration || "").toLowerCase().includes("vendor return") || (line.narration || "").toLowerCase().includes("return clearing");
+        const isFulfillmentCredit = (line.narration || "").toLowerCase().includes("fulfillment outward") || (line.narration || "").toLowerCase().includes("stock outward");
+
+        const isDebit = Number(line.debit_amount || line.debit || 0) > 0;
+        const isCredit = Number(line.credit_amount || line.credit || 0) > 0;
+        const side = isDebit ? "DEBIT" : isCredit ? "CREDIT" : "ZERO";
+
+        let accNum = line.account?.account_number || line.account_code || "—";
+        let accName = line.account?.account_name || line.account_name || "—";
+        
+        if (isTaxLine && (accName.toLowerCase().includes("equity") || accName === "—" || accName.toLowerCase().includes("bank"))) {
+          accNum = "1400";
+          accName = "Input GST";
+        } else if (isFulfillmentDebit && isDebit && (accName.toLowerCase().includes("bank") || accName.toLowerCase().includes("cash") || accName === "—")) {
+          accNum = "5010";
+          accName = "Vendor Return / Inventory Adjustment";
+        } else if (isFulfillmentCredit && isCredit && (accName.toLowerCase().includes("inventory") || accName === "—")) {
+          accNum = "1200";
+          accName = "Inventory Asset";
+        }
+
+        const key = `${accName}_${side}`;
+
+        if (map.has(key)) {
+          const existing = map.get(key);
+          existing.debit_amount = Number((Number(existing.debit_amount || 0) + Number(line.debit_amount || line.debit || 0)).toFixed(2));
+          existing.credit_amount = Number((Number(existing.credit_amount || 0) + Number(line.credit_amount || line.credit || 0)).toFixed(2));
+          if (line.narration && !existing.narration.includes(line.narration)) {
+            existing.narration = `${existing.narration}; ${line.narration}`;
+          }
+        } else {
+          map.set(key, {
+            id: line.id,
+            account_id: line.account_id,
+            account_number: accNum,
+            account_name: accName,
+            debit_amount: Number(Number(line.debit_amount || line.debit || 0).toFixed(2)),
+            credit_amount: Number(Number(line.credit_amount || line.credit || 0).toFixed(2)),
+            narration: line.narration || line.memo || "GL Impact Entry",
+            account: line.account || { id: line.account_id, account_number: accNum, account_name: accName },
+          });
+        }
+      }
+      return Array.from(map.values());
+    };
+
     if (entries.length === 1) {
+      const entryObj: any = typeof (entries[0] as any).toJSON === "function" ? (entries[0] as any).toJSON() : { ...(entries[0] as any) };
+      entryObj.lines = groupLinesByAccount(entryObj.lines || []);
       res.status(StatusCodes.OK).json({
         message: "Journal entry fetched successfully",
         success: true,
-        result: entries[0],
+        result: entryObj,
       });
       return;
     }
 
-    const combinedLines = entries.flatMap((e: any) => e.lines || []);
+    const combinedLines = groupLinesByAccount(entries.flatMap((e: any) => e.lines || []));
     const totalDebit = Number(combinedLines.reduce((s: number, l: any) => s + Number(l.debit_amount || 0), 0).toFixed(2));
     const totalCredit = Number(combinedLines.reduce((s: number, l: any) => s + Number(l.credit_amount || 0), 0).toFixed(2));
 
