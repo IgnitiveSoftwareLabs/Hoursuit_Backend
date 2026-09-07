@@ -5,6 +5,7 @@ import { StatusCodes } from "http-status-codes";
 import { Op } from "sequelize";
 
 import PurchaseInvoiceHeader from "../../../../modals/Transactions/purchase/purchaseInvoice/purchaseInvoiceHeader";
+import PurchaseInvoiceLine from "../../../../modals/Transactions/purchase/purchaseInvoice/purchaseInvoiceLine";
 import ChartOfAccountMaster from "../../../../modals/masters/chartOfAccount/chartOfAccount";
 import VendorAddressBook from "../../../../modals/masters/vendorDetails/VendorAddressBook";
 import TransportationMode from "../../../../modals/masters/transportMode/transportMode";
@@ -500,26 +501,72 @@ const PurchaseOrderController = {
         let poResult: any = purchaseOrder.toJSON ? purchaseOrder.toJSON() : purchaseOrder;
         try {
             const summary = await InventoryService.getPurchaseOrderReceiptSummary(Number(id), CompanyId);
-            poResult.receiptSummary = {
-                totalOrderedQty: summary.totalOrderedQty,
-                totalReceivedQty: summary.totalReceivedQty,
-                totalRemainingQty: summary.totalRemainingQty,
-                isFullyReceived: summary.isFullyReceived,
-            };
+
+            const lineIds = Array.isArray(poResult.purchaseOrderLines)
+                ? poResult.purchaseOrderLines.map((l: any) => Number(l.id)).filter(Boolean)
+                : [];
+
+            let billedLines: any[] = [];
+            if (lineIds.length > 0) {
+                billedLines = await PurchaseInvoiceLine.findAll({
+                    where: {
+                        poLineId: { [Op.in]: lineIds },
+                    },
+                    include: [{
+                        model: PurchaseInvoiceHeader,
+                        as: "invoiceHeader",
+                        where: { status: { [Op.ne]: "CANCELLED" } },
+                        required: true,
+                    }],
+                });
+            }
 
             if (Array.isArray(poResult.purchaseOrderLines)) {
                 poResult.purchaseOrderLines = poResult.purchaseOrderLines.map((line: any) => {
                     const lineSum = summary.lineSummaries.find((s: any) => Number(s.purchaseOrderLineId) === Number(line.id));
+                    const receivedQty = lineSum?.previouslyReceivedQty ?? 0;
+                    const acceptedQty = lineSum?.previouslyAcceptedQty ?? 0;
+                    const lineBilledQty = billedLines
+                        .filter((bl: any) => Number(bl.poLineId) === Number(line.id))
+                        .reduce((sum, bl) => sum + Number(bl.quantity || 0), 0);
+                    const recQtyForBilling = acceptedQty > 0 ? acceptedQty : receivedQty;
+                    const unbilledQty = Math.max(0, recQtyForBilling - lineBilledQty);
+                    const isFullyBilled = recQtyForBilling > 0 && unbilledQty <= 0;
+
                     return {
                         ...line,
-                        receivedQuantity: lineSum?.previouslyReceivedQty ?? 0,
-                        acceptedQuantity: lineSum?.previouslyAcceptedQty ?? 0,
+                        receivedQuantity: receivedQty,
+                        acceptedQuantity: acceptedQty,
                         rejectedQuantity: lineSum?.previouslyRejectedQty ?? 0,
                         remainingQuantity: lineSum?.remainingQty ?? Number(line.quantity || 0),
+                        billedQuantity: lineBilledQty,
+                        unbilledQuantity: unbilledQty,
                         isFullyReceived: lineSum?.isFullyReceived ?? false,
+                        isFullyBilled,
                     };
                 });
             }
+
+            const totalBilledQty = Array.isArray(poResult.purchaseOrderLines)
+                ? poResult.purchaseOrderLines.reduce((sum: number, l: any) => sum + Number(l.billedQuantity || 0), 0)
+                : 0;
+            const totalUnbilledQty = Array.isArray(poResult.purchaseOrderLines)
+                ? poResult.purchaseOrderLines.reduce((sum: number, l: any) => sum + Number(l.unbilledQuantity || 0), 0)
+                : 0;
+            const totalRecForBilling = Array.isArray(poResult.purchaseOrderLines)
+                ? poResult.purchaseOrderLines.reduce((sum: number, l: any) => sum + Number(l.acceptedQuantity > 0 ? l.acceptedQuantity : l.receivedQuantity || 0), 0)
+                : 0;
+            const isFullyBilled = totalRecForBilling > 0 && totalUnbilledQty <= 0;
+
+            poResult.receiptSummary = {
+                totalOrderedQty: summary.totalOrderedQty,
+                totalReceivedQty: summary.totalReceivedQty,
+                totalRemainingQty: summary.totalRemainingQty,
+                totalBilledQty,
+                totalUnbilledQty,
+                isFullyReceived: summary.isFullyReceived,
+                isFullyBilled,
+            };
         } catch (e) {
             console.error("Error calculating PO receipt summary:", e);
         }

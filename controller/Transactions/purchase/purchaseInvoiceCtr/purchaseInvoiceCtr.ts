@@ -10,6 +10,7 @@ import { normalizePurchaseInvoiceStatus } from "../../../../utils/p2pStatus";
 import { findCompanyForUser } from "../../../../utils/findCompanyForUser";
 import ItemMaster from "../../../../modals/masters/items/itemMaster";
 import { GLImpactService } from "../../../../utils/glImpactService";
+import { InventoryService } from "../../../../utils/inventoryService";
 import { GRN, GRNLine } from "../../../../modals/Transactions/purchase/GRN";
 import { CustomRequest } from "../../../../typeRequest/customReq";
 import sequelize from "../../../../dbconfig/dbconfig";
@@ -190,9 +191,65 @@ const PurchaseInvoiceController = {
                     if (poLine) {
                         poTaxRate = Number(poLine.tax_rate || 0);
                         const maxPoQty = Number(poLine.quantity || 0);
-                        if (quantity > maxPoQty) {
-                            res.status(StatusCodes.BAD_REQUEST);
-                            throw new Error(`Billed quantity (${quantity}) exceeds approved PO quantity (${maxPoQty}) for PO Line #${poLine.id}`);
+
+                        // Use InventoryService to calculate total received quantity for this PO line across all GRNs
+                        let totalReceivedQty = 0;
+                        try {
+                            const poSummary = await InventoryService.getPurchaseOrderReceiptSummary(
+                                Number(poLine.purchase_order_header_id),
+                                companyId,
+                                undefined,
+                                transaction
+                            );
+                            const lineSum = poSummary.lineSummaries.find(
+                                (s: any) => Number(s.purchaseOrderLineId) === Number(poLine.id)
+                            );
+                            totalReceivedQty = Number(
+                                (lineSum?.previouslyAcceptedQty && lineSum.previouslyAcceptedQty > 0)
+                                    ? lineSum.previouslyAcceptedQty
+                                    : (lineSum?.previouslyReceivedQty ?? 0)
+                            );
+                        } catch (e) {
+                            // fallback to direct line query
+                            const grnLinesForPo = await GRNLine.findAll({
+                                where: { purchaseOrderLineId: poLineId },
+                                include: [{
+                                    model: GRN,
+                                    as: "grnHeader",
+                                    where: { status: { [Op.ne]: "CANCELLED" } },
+                                    required: true,
+                                }],
+                                transaction,
+                            });
+                            totalReceivedQty = grnLinesForPo.reduce((sum, gl) => {
+                                const rec = Number(gl.acceptedQty > 0 ? gl.acceptedQty : gl.receivedQty || 0);
+                                return sum + rec;
+                            }, 0);
+                        }
+
+                        // Calculate previously billed quantity across all existing non-cancelled bills for this PO line
+                        const existingBilledLines = await PurchaseInvoiceLine.findAll({
+                            where: { poLineId },
+                            include: [{
+                                model: PurchaseInvoiceHeader,
+                                as: "invoiceHeader",
+                                where: { status: { [Op.ne]: "CANCELLED" } },
+                                required: true,
+                            }],
+                            transaction,
+                        });
+                        const previouslyBilledQty = existingBilledLines.reduce((sum, l) => sum + Number(l.quantity || 0), 0);
+
+                        if (totalReceivedQty > 0) {
+                            if (quantity + previouslyBilledQty > totalReceivedQty) {
+                                res.status(StatusCodes.BAD_REQUEST);
+                                throw new Error(`Billed quantity (${quantity}) plus previously billed quantity (${previouslyBilledQty}) exceeds total received quantity (${totalReceivedQty}) across GRNs for PO Line #${poLine.id}`);
+                            }
+                        } else {
+                            if (quantity + previouslyBilledQty > maxPoQty) {
+                                res.status(StatusCodes.BAD_REQUEST);
+                                throw new Error(`Billed quantity (${quantity}) plus previously billed quantity (${previouslyBilledQty}) exceeds approved PO quantity (${maxPoQty}) for PO Line #${poLine.id}`);
+                            }
                         }
                     }
                 } else if (!grnLineId && !poLineId && (poTaxRate === 0 || !lineItem.taxPercent)) {
@@ -639,10 +696,76 @@ const PurchaseInvoiceController = {
                     if (pol) {
                         poTaxRate = Number(pol.tax_rate || 0);
                     }
+                    const maxReceivable = grnLine ? Number(grnLine.acceptedQty > 0 ? grnLine.acceptedQty : grnLine.receivedQty || 0) : 0;
+                    if (maxReceivable > 0 && quantity > maxReceivable) {
+                        res.status(StatusCodes.BAD_REQUEST);
+                        throw new Error(`Billed quantity (${quantity}) exceeds received quantity (${maxReceivable}) for GRN Line #${grnLineId}`);
+                    }
                 } else if (poLineId) {
                     const poLine = await PurchaseOrderLine.findByPk(poLineId, { transaction });
                     if (poLine) {
                         poTaxRate = Number(poLine.tax_rate || 0);
+                        const maxPoQty = Number(poLine.quantity || 0);
+
+                        let totalReceivedQty = 0;
+                        try {
+                            const poSummary = await InventoryService.getPurchaseOrderReceiptSummary(
+                                Number(poLine.purchase_order_header_id),
+                                companyId,
+                                undefined,
+                                transaction
+                            );
+                            const lineSum = poSummary.lineSummaries.find(
+                                (s: any) => Number(s.purchaseOrderLineId) === Number(poLine.id)
+                            );
+                            totalReceivedQty = Number(
+                                (lineSum?.previouslyAcceptedQty && lineSum.previouslyAcceptedQty > 0)
+                                    ? lineSum.previouslyAcceptedQty
+                                    : (lineSum?.previouslyReceivedQty ?? 0)
+                            );
+                        } catch (e) {
+                            const grnLinesForPo = await GRNLine.findAll({
+                                where: { purchaseOrderLineId: poLineId },
+                                include: [{
+                                    model: GRN,
+                                    as: "grnHeader",
+                                    where: { status: { [Op.ne]: "CANCELLED" } },
+                                    required: true,
+                                }],
+                                transaction,
+                            });
+                            totalReceivedQty = grnLinesForPo.reduce((sum, gl) => {
+                                const rec = Number(gl.acceptedQty > 0 ? gl.acceptedQty : gl.receivedQty || 0);
+                                return sum + rec;
+                            }, 0);
+                        }
+
+                        const existingBilledLines = await PurchaseInvoiceLine.findAll({
+                            where: {
+                                poLineId,
+                                invoiceHeaderId: { [Op.ne]: existingInvoice.id },
+                            },
+                            include: [{
+                                model: PurchaseInvoiceHeader,
+                                as: "invoiceHeader",
+                                where: { status: { [Op.ne]: "CANCELLED" } },
+                                required: true,
+                            }],
+                            transaction,
+                        });
+                        const previouslyBilledQty = existingBilledLines.reduce((sum, l) => sum + Number(l.quantity || 0), 0);
+
+                        if (totalReceivedQty > 0) {
+                            if (quantity + previouslyBilledQty > totalReceivedQty) {
+                                res.status(StatusCodes.BAD_REQUEST);
+                                throw new Error(`Billed quantity (${quantity}) plus previously billed quantity (${previouslyBilledQty}) exceeds total received quantity (${totalReceivedQty}) across GRNs for PO Line #${poLine.id}`);
+                            }
+                        } else {
+                            if (quantity + previouslyBilledQty > maxPoQty) {
+                                res.status(StatusCodes.BAD_REQUEST);
+                                throw new Error(`Billed quantity (${quantity}) plus previously billed quantity (${previouslyBilledQty}) exceeds approved PO quantity (${maxPoQty}) for PO Line #${poLine.id}`);
+                            }
+                        }
                     }
                 } else if (!grnLineId && !poLineId && (poTaxRate === 0 || !lineItem.taxPercent)) {
                     const itm = await ItemMaster.findByPk(itemId, {

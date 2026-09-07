@@ -6,6 +6,7 @@ import { Op } from "sequelize";
 import { PurchasePaymentHeader, PurchasePaymentLine } from "../../../../modals/Transactions/purchase/purchasePayment";
 import PurchaseInvoiceHeader from "../../../../modals/Transactions/purchase/purchaseInvoice/purchaseInvoiceHeader";
 import { PurchaseInvoiceLine } from "../../../../modals/Transactions/purchase/purchaseInvoice";
+import ItemMaster from "../../../../modals/masters/items/itemMaster";
 import ChartOfAccountMaster from "../../../../modals/masters/chartOfAccount/chartOfAccount";
 import VendorDetails from "../../../../modals/masters/vendorDetails/vendorDetails";
 import PaymentMethod from "../../../../modals/masters/paymentMethod/paymentMethod";
@@ -314,6 +315,25 @@ const PurchasePaymentController = {
                     model: PurchasePaymentLine,
                     as: "paymentLines",
                     required: false,
+                    include: [
+                        {
+                            model: PurchaseInvoiceLine,
+                            as: "purchaseInvoiceLine",
+                            required: false,
+                            include: [
+                                {
+                                    model: PurchaseInvoiceHeader,
+                                    as: "invoiceHeader",
+                                    required: false,
+                                },
+                                {
+                                    model: ItemMaster,
+                                    as: "item",
+                                    required: false,
+                                },
+                            ],
+                        },
+                    ],
                 },
             ],
             offset,
@@ -377,6 +397,25 @@ const PurchasePaymentController = {
                     model: PurchasePaymentLine,
                     as: "paymentLines",
                     required: false,
+                    include: [
+                        {
+                            model: PurchaseInvoiceLine,
+                            as: "purchaseInvoiceLine",
+                            required: false,
+                            include: [
+                                {
+                                    model: PurchaseInvoiceHeader,
+                                    as: "invoiceHeader",
+                                    required: false,
+                                },
+                                {
+                                    model: ItemMaster,
+                                    as: "item",
+                                    required: false,
+                                },
+                            ],
+                        },
+                    ],
                 },
             ],
         });
