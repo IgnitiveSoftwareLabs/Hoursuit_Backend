@@ -280,15 +280,23 @@ const VendorController = {
             }
 
             if (Array.isArray(subAssignmentsInput) && subAssignmentsInput.length > 0) {
-                const subEntries = subAssignmentsInput.map((sub: any) => ({
-                    vendor_id: vendor.id,
-                    subsidiary_id: Number(sub.subsidiary_id || sub.subsidiary),
-                    credit_limit: sub.credit_limit ? Number(sub.credit_limit) : null,
-                    tax_code_id: sub.tax_code_id ? Number(sub.tax_code_id) : null,
-                    is_primary: Boolean(sub.is_primary || (validatedSubsidiaryId === Number(sub.subsidiary_id || sub.subsidiary))),
-                }));
-
-                await VendorSubsidiary.bulkCreate(subEntries, { transaction });
+                const subMap = new Map<number, any>();
+                for (const sub of subAssignmentsInput) {
+                    const subId = Number(sub.subsidiary_id || sub.subsidiary);
+                    if (subId && !isNaN(subId) && !subMap.has(subId)) {
+                        subMap.set(subId, {
+                            vendor_id: vendor.id,
+                            subsidiary_id: subId,
+                            credit_limit: sub.credit_limit ? Number(sub.credit_limit) : null,
+                            tax_code_id: sub.tax_code_id ? Number(sub.tax_code_id) : null,
+                            is_primary: Boolean(sub.is_primary || (validatedSubsidiaryId === subId)),
+                        });
+                    }
+                }
+                const subEntries = Array.from(subMap.values());
+                if (subEntries.length > 0) {
+                    await VendorSubsidiary.bulkCreate(subEntries, { transaction });
+                }
             } else if (validatedSubsidiaryId) {
                 await VendorSubsidiary.create(
                     {
@@ -645,14 +653,23 @@ const VendorController = {
             if (Array.isArray(subAssignmentsInput)) {
                 await VendorSubsidiary.destroy({ where: { vendor_id: vendor.id }, transaction });
                 if (subAssignmentsInput.length > 0) {
-                    const subEntries = subAssignmentsInput.map((sub: any) => ({
-                        vendor_id: vendor.id,
-                        subsidiary_id: Number(sub.subsidiary_id || sub.subsidiary),
-                        credit_limit: sub.credit_limit ? Number(sub.credit_limit) : null,
-                        tax_code_id: sub.tax_code_id ? Number(sub.tax_code_id) : null,
-                        is_primary: Boolean(sub.is_primary || (validatedSubsidiaryId === Number(sub.subsidiary_id || sub.subsidiary))),
-                    }));
-                    await VendorSubsidiary.bulkCreate(subEntries, { transaction });
+                    const subMap = new Map<number, any>();
+                    for (const sub of subAssignmentsInput) {
+                        const subId = Number(sub.subsidiary_id || sub.subsidiary);
+                        if (subId && !isNaN(subId) && !subMap.has(subId)) {
+                            subMap.set(subId, {
+                                vendor_id: vendor.id,
+                                subsidiary_id: subId,
+                                credit_limit: sub.credit_limit ? Number(sub.credit_limit) : null,
+                                tax_code_id: sub.tax_code_id ? Number(sub.tax_code_id) : null,
+                                is_primary: Boolean(sub.is_primary || (validatedSubsidiaryId === subId)),
+                            });
+                        }
+                    }
+                    const subEntries = Array.from(subMap.values());
+                    if (subEntries.length > 0) {
+                        await VendorSubsidiary.bulkCreate(subEntries, { transaction });
+                    }
                 }
             }
 
