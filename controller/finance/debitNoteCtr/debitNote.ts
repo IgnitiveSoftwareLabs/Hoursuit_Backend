@@ -15,6 +15,7 @@ import VendorDetails from "../../../modals/masters/vendorDetails/vendorDetails";
 import Customer from "../../../modals/masters/customer/customer";
 import PurchaseReturnHeader from "../../../modals/Transactions/purchase/purchaseReturn/purchaseReturnHeader";
 import { calculateDiscount, calculateGrandTotal, calculateSubtotal, calculateTax, generateDocumentNumber } from "../../../utils/noteHelpers";
+import { generateSequentialDocNumber } from "../../../utils/documentNumberHelper";
 import { postDebitNoteToGL } from "../../../services/accounting/debitNotePosting";
 
 const DebitNoteController = {
@@ -97,7 +98,29 @@ const DebitNoteController = {
         const module_type = headerData.module_type || (customer_id ? "SALES" : "PURCHASE");
 
         // 5. Document Number & Dates
-        const document_number = String(headerData.document_number || headerData.debitNoteNumber || headerData.debit_note_number || generateDocumentNumber("DN", companyId)).trim();
+        let document_number = String(headerData.document_number || headerData.debitNoteNumber || headerData.debit_note_number || "").trim();
+        if (!document_number || document_number.startsWith("DN-NEW") || document_number === "To Be Generated" || document_number.startsWith("DN-17") || document_number.includes(new Date().getFullYear().toString())) {
+            document_number = await generateSequentialDocNumber(
+                DebitNoteHeader,
+                "document_number",
+                "DN",
+                "company_id",
+                companyId
+            );
+        } else {
+            const existingDocument = await DebitNoteHeader.findOne({
+                where: { company_id: companyId, document_number, isActive: true },
+            });
+            if (existingDocument) {
+                document_number = await generateSequentialDocNumber(
+                    DebitNoteHeader,
+                    "document_number",
+                    "DN",
+                    "company_id",
+                    companyId
+                );
+            }
+        }
         const document_date = headerData.document_date || headerData.debitNoteDate || headerData.debit_note_date || new Date();
         const document_status = headerData.document_status || (headerData.status === "APPROVED" ? "Approved" : "Draft");
         const remarks = headerData.remarks || headerData.reason || null;
@@ -121,15 +144,6 @@ const DebitNoteController = {
             discountAmount = Number(headerData.discount_amount !== undefined ? headerData.discount_amount : (headerData.discountAmount || 0));
             taxAmount = Number(headerData.tax_amount !== undefined ? headerData.tax_amount : (headerData.taxAmount || 0));
             totalAmount = Number(headerData.total_amount !== undefined ? headerData.total_amount : (headerData.amount || (subtotal - discountAmount + taxAmount)));
-        }
-
-        // Check for duplicate document number
-        const existingDocument = await DebitNoteHeader.findOne({
-            where: { company_id: companyId, document_number, isActive: true },
-        });
-        if (existingDocument) {
-            res.status(StatusCodes.CONFLICT);
-            throw new Error(`Debit Note #${document_number} already exists`);
         }
 
         // 7. Create DebitNoteHeader
@@ -228,11 +242,15 @@ const DebitNoteController = {
         if (moduleType) where.module_type = moduleType;
         if (documentStatus) where.document_status = documentStatus;
         if (postingStatus) where.posting_status = postingStatus;
+
         if (search) {
-            where.document_number = { [Op.like]: `%${search}%` };
+            where[Op.or] = [
+                { document_number: { [Op.iLike]: `%${search}%` } },
+                { remarks: { [Op.iLike]: `%${search}%` } },
+            ];
         }
 
-        const { count, rows } = await DebitNoteHeader.findAndCountAll({
+        const { rows, count } = await DebitNoteHeader.findAndCountAll({
             where,
             include: [
                 { association: "voucherType", attributes: ["id", "code", "name"] },
@@ -240,22 +258,29 @@ const DebitNoteController = {
                 { association: "currency", attributes: ["id", "currency_name", "currency_code"] },
                 { association: "vendor" },
                 { association: "customer" },
+                { association: "lines" },
             ],
-            limit,
+            order: [["created_at", "DESC"]],
             offset,
-            order: [["document_date", "DESC"], ["id", "DESC"]],
+            limit,
+            distinct: true,
         });
 
-        res.status(StatusCodes.OK).json({ message: "Debit notes fetched successfully", success: true, result: { rows, count, page, limit, totalPages: Math.ceil(count / limit) } });
+        res.status(StatusCodes.OK).json({
+            message: "Debit notes fetched successfully",
+            success: true,
+            result: {
+                rows,
+                count,
+                page,
+                limit,
+                totalPages: Math.ceil(count / limit),
+            },
+        });
     }),
 
     getDebitNoteById: asyncHandler(async (req: CustomRequest, res: Response) => {
-        const { id } = req.params;
         const userId = req.user?.id;
-        if (!id || isNaN(Number(id))) {
-            res.status(StatusCodes.BAD_REQUEST);
-            throw new Error("Valid debit note ID is required");
-        }
         if (!userId) {
             res.status(StatusCodes.UNAUTHORIZED);
             throw new Error("User not authenticated");
@@ -263,12 +288,13 @@ const DebitNoteController = {
 
         const company = await findCompanyForUser(req.user);
         const companyId = company?.id;
+        const id = Number(req.params.id);
 
-        const whereHeader: any = { id: Number(id), isActive: true };
-        if (companyId) whereHeader.company_id = companyId;
+        const where: any = { id, isActive: true };
+        if (companyId) where.company_id = companyId;
 
-        const header = await DebitNoteHeader.findOne({
-            where: whereHeader,
+        const debitNote = await DebitNoteHeader.findOne({
+            where,
             include: [
                 { association: "voucherType", attributes: ["id", "code", "name"] },
                 { association: "company", attributes: ["id", "name"] },
@@ -276,164 +302,20 @@ const DebitNoteController = {
                 { association: "currency", attributes: ["id", "currency_name", "currency_code"] },
                 { association: "vendor" },
                 { association: "customer" },
-                { association: "lines", include: [{ association: "item", attributes: ["id", "item_name"] }, { association: "uom", attributes: ["id", "uom_name"] }] },
+                { association: "lines" },
             ],
         });
 
-        if (!header) {
+        if (!debitNote) {
             res.status(StatusCodes.NOT_FOUND);
             throw new Error("Debit note not found");
         }
 
-        res.status(StatusCodes.OK).json({ message: "Debit note fetched successfully", success: true, result: header });
+        res.status(StatusCodes.OK).json({ message: "Debit note fetched successfully", success: true, result: debitNote });
     }),
 
     updateDebitNote: asyncHandler(async (req: CustomRequest, res: Response) => {
-        const { id } = req.params;
-        const rawBody = req.body || {};
-        const headerData = rawBody.header ? { ...rawBody, ...rawBody.header } : rawBody;
-        const userId = req.user?.id || headerData.user_id || 1;
-
-        if (!id || isNaN(Number(id))) {
-            res.status(StatusCodes.BAD_REQUEST);
-            throw new Error("Valid debit note ID is required");
-        }
-        if (!userId) {
-            res.status(StatusCodes.UNAUTHORIZED);
-            throw new Error("User not authenticated");
-        }
-
-        const company = await findCompanyForUser(req.user);
-        const companyId = company?.id || headerData.company_id;
-
-        const whereHeader: any = { id: Number(id), isActive: true };
-        if (companyId) whereHeader.company_id = companyId;
-
-        const header = await DebitNoteHeader.findOne({ where: whereHeader });
-        if (!header) {
-            res.status(StatusCodes.NOT_FOUND);
-            throw new Error("Debit note not found");
-        }
-
-        if (header.document_status === "Posted" || header.document_status === "Cancelled") {
-            res.status(StatusCodes.BAD_REQUEST);
-            throw new Error("Cannot modify posted or cancelled debit note");
-        }
-
-        const docNumber = headerData.document_number || headerData.debitNoteNumber || headerData.debit_note_number;
-        if (docNumber && docNumber !== header.document_number) {
-            const duplicate = await DebitNoteHeader.findOne({ 
-                where: { 
-                    company_id: header.company_id, 
-                    document_number: docNumber, 
-                    isActive: true,
-                    id: { [Op.ne]: header.id }
-                } 
-            });
-            if (duplicate) {
-                res.status(StatusCodes.CONFLICT);
-                throw new Error("Duplicate document number already exists");
-            }
-            header.document_number = docNumber;
-        }
-
-        const subId = headerData.subsidiary_id || headerData.subsidiaryId;
-        if (subId) header.subsidiary_id = Number(subId);
-
-        const vId = headerData.vendor_id || headerData.vendorId;
-        if (vId !== undefined) header.vendor_id = vId ? Number(vId) : null;
-
-        const cId = headerData.customer_id || headerData.customerId;
-        if (cId !== undefined) header.customer_id = cId ? Number(cId) : null;
-
-        const refDocId = headerData.reference_document_id || headerData.purchaseInvoiceHeaderId;
-        if (refDocId !== undefined) header.reference_document_id = refDocId ? Number(refDocId) : null;
-
-        if (headerData.document_date || headerData.debitNoteDate) {
-            header.document_date = headerData.document_date || headerData.debitNoteDate;
-        }
-        if (headerData.currency_id || headerData.currencyId) {
-            header.currency_id = Number(headerData.currency_id || headerData.currencyId);
-        }
-        if (headerData.remarks !== undefined || headerData.reason !== undefined) {
-            header.remarks = headerData.remarks || headerData.reason || null;
-        }
-        if (headerData.status || headerData.document_status) {
-            header.document_status = headerData.document_status || (headerData.status === "APPROVED" ? "Approved" : "Draft");
-        }
-
-        const rawLines = rawBody.lines || rawBody.lineItems || rawBody.details || headerData.lines;
-        if (Array.isArray(rawLines) && rawLines.length > 0) {
-            const subtotal = calculateSubtotal(rawLines);
-            const discountAmount = calculateDiscount(rawLines);
-            const taxAmount = calculateTax(rawLines);
-            const totalAmount = calculateGrandTotal({ subtotal, discountAmount, taxAmount, roundOff: Number(header.round_off || 0) });
-            header.subtotal = Number(subtotal.toFixed(2));
-            header.discount_amount = Number(discountAmount.toFixed(2));
-            header.tax_amount = Number(taxAmount.toFixed(2));
-            header.total_amount = Number(totalAmount.toFixed(2));
-
-            await DebitNoteLine.destroy({ where: { header_id: header.id } });
-            await DebitNoteLine.bulkCreate(rawLines.map((line: any) => ({
-                header_id: header.id,
-                company_id: header.company_id,
-                item_id: Number(line.item_id || line.itemId),
-                description: line.description ?? null,
-                quantity: Number(line.quantity || line.qty || 1),
-                uom_id: Number(line.uom_id || line.uomId || 1),
-                rate: Number(line.rate || line.unitPrice || 0),
-                discount_percentage: Number(line.discount_percentage || line.discountPercent || 0),
-                discount_amount: Number(line.discount_amount || line.discountAmount || 0),
-                tax_code_id: line.tax_code_id ? Number(line.tax_code_id) : null,
-                tax_percentage: Number(line.tax_percentage || line.taxPercent || 0),
-                tax_amount: Number(line.tax_amount || line.taxAmount || 0),
-                line_amount: Number(line.line_amount || line.totalAmount || 0),
-                remarks: line.remarks ?? null,
-                created_by: userId,
-                updated_by: userId,
-                isActive: true,
-            })) as any);
-        } else {
-            if (headerData.subtotal !== undefined) header.subtotal = Number(headerData.subtotal);
-            if (headerData.discount_amount !== undefined || headerData.discountAmount !== undefined) {
-                header.discount_amount = Number(headerData.discount_amount !== undefined ? headerData.discount_amount : headerData.discountAmount);
-            }
-            if (headerData.tax_amount !== undefined || headerData.taxAmount !== undefined) {
-                header.tax_amount = Number(headerData.tax_amount !== undefined ? headerData.tax_amount : headerData.taxAmount);
-            }
-            if (headerData.total_amount !== undefined || headerData.amount !== undefined) {
-                header.total_amount = Number(headerData.total_amount !== undefined ? headerData.total_amount : headerData.amount);
-            }
-        }
-
-        header.updated_by = userId;
-        await header.save();
-
-        if (header.document_status === "Approved" || header.document_status === "Posted") {
-            const lines = await DebitNoteLine.findAll({ where: { header_id: header.id } });
-            await postDebitNoteToGL(header, lines);
-        }
-
-        const result = await DebitNoteHeader.findByPk(header.id, { 
-            include: [
-                { association: "voucherType", attributes: ["id", "code", "name"] },
-                { association: "subsidiary", attributes: ["id", "subsidiary_name"] },
-                { association: "currency", attributes: ["id", "currency_name", "currency_code"] },
-                { association: "vendor" },
-                { association: "customer" },
-                { association: "lines" }
-            ] 
-        });
-        res.status(StatusCodes.OK).json({ message: "Debit note updated successfully", success: true, result });
-    }),
-
-    deleteDebitNote: asyncHandler(async (req: CustomRequest, res: Response) => {
-        const { id } = req.params;
         const userId = req.user?.id;
-        if (!id || isNaN(Number(id))) {
-            res.status(StatusCodes.BAD_REQUEST);
-            throw new Error("Valid debit note ID is required");
-        }
         if (!userId) {
             res.status(StatusCodes.UNAUTHORIZED);
             throw new Error("User not authenticated");
@@ -441,22 +323,131 @@ const DebitNoteController = {
 
         const company = await findCompanyForUser(req.user);
         const companyId = company?.id;
+        const id = Number(req.params.id);
 
-        const whereHeader: any = { id: Number(id), isActive: true };
-        if (companyId) whereHeader.company_id = companyId;
+        const where: any = { id, isActive: true };
+        if (companyId) where.company_id = companyId;
 
-        const header = await DebitNoteHeader.findOne({ where: whereHeader });
-        if (!header) {
+        const debitNote = await DebitNoteHeader.findOne({ where });
+        if (!debitNote) {
             res.status(StatusCodes.NOT_FOUND);
             throw new Error("Debit note not found");
         }
 
-        header.isActive = false;
-        header.document_status = "Cancelled";
-        header.updated_by = userId;
-        await header.save();
+        if (debitNote.posting_status === "Posted") {
+            res.status(StatusCodes.BAD_REQUEST);
+            throw new Error("Cannot update a posted debit note");
+        }
 
-        res.status(StatusCodes.OK).json({ message: "Debit note deleted successfully", success: true, result: null });
+        const rawBody = req.body || {};
+        const headerData = rawBody.header ? { ...rawBody, ...rawBody.header } : rawBody;
+
+        const rawLines = rawBody.lines || rawBody.lineItems || rawBody.details || headerData.lines;
+        let subtotal = Number(debitNote.subtotal);
+        let discountAmount = Number(debitNote.discount_amount);
+        let taxAmount = Number(debitNote.tax_amount);
+        let totalAmount = Number(debitNote.total_amount);
+
+        if (Array.isArray(rawLines)) {
+            subtotal = calculateSubtotal(rawLines);
+            discountAmount = calculateDiscount(rawLines);
+            taxAmount = calculateTax(rawLines);
+            totalAmount = calculateGrandTotal({
+                subtotal,
+                discountAmount,
+                taxAmount,
+                roundOff: Number(headerData.round_off !== undefined ? headerData.round_off : debitNote.round_off),
+            });
+        }
+
+        await debitNote.update({
+            subsidiary_id: headerData.subsidiary_id !== undefined ? Number(headerData.subsidiary_id) : debitNote.subsidiary_id,
+            vendor_id: headerData.vendor_id !== undefined ? (headerData.vendor_id ? Number(headerData.vendor_id) : null) : debitNote.vendor_id,
+            customer_id: headerData.customer_id !== undefined ? (headerData.customer_id ? Number(headerData.customer_id) : null) : debitNote.customer_id,
+            document_date: headerData.document_date || headerData.debitNoteDate || debitNote.document_date,
+            document_status: headerData.document_status || debitNote.document_status,
+            currency_id: headerData.currency_id !== undefined ? Number(headerData.currency_id) : debitNote.currency_id,
+            exchange_rate: headerData.exchange_rate !== undefined ? Number(headerData.exchange_rate) : debitNote.exchange_rate,
+            subtotal: Number(subtotal.toFixed(2)),
+            discount_amount: Number(discountAmount.toFixed(2)),
+            tax_amount: Number(taxAmount.toFixed(2)),
+            round_off: headerData.round_off !== undefined ? Number(headerData.round_off) : debitNote.round_off,
+            total_amount: Number(totalAmount.toFixed(2)),
+            remarks: headerData.remarks !== undefined ? headerData.remarks : debitNote.remarks,
+            updated_by: userId,
+        });
+
+        if (Array.isArray(rawLines)) {
+            await DebitNoteLine.destroy({ where: { header_id: debitNote.id } });
+            if (rawLines.length > 0) {
+                await DebitNoteLine.bulkCreate(
+                    rawLines.map((line: any) => ({
+                        header_id: debitNote.id,
+                        company_id: companyId,
+                        item_id: Number(line.item_id || line.itemId),
+                        description: line.description ?? null,
+                        quantity: Number(line.quantity || line.qty || 1),
+                        uom_id: Number(line.uom_id || line.uomId || 1),
+                        rate: Number(line.rate || line.unitPrice || 0),
+                        discount_percentage: Number(line.discount_percentage || line.discountPercent || 0),
+                        discount_amount: Number(line.discount_amount || line.discountAmount || 0),
+                        tax_code_id: line.tax_code_id ? Number(line.tax_code_id) : null,
+                        tax_percentage: Number(line.tax_percentage || line.taxPercent || 0),
+                        tax_amount: Number(line.tax_amount || line.taxAmount || 0),
+                        line_amount: Number(line.line_amount || line.totalAmount || 0),
+                        remarks: line.remarks ?? null,
+                        created_by: userId,
+                        updated_by: userId,
+                        isActive: true,
+                    })) as any
+                );
+            }
+        }
+
+        const updated = await DebitNoteHeader.findByPk(debitNote.id, {
+            include: [
+                { association: "voucherType", attributes: ["id", "code", "name"] },
+                { association: "company", attributes: ["id", "name"] },
+                { association: "subsidiary", attributes: ["id", "subsidiary_name"] },
+                { association: "currency", attributes: ["id", "currency_name", "currency_code"] },
+                { association: "vendor" },
+                { association: "customer" },
+                { association: "lines" },
+            ],
+        });
+
+        res.status(StatusCodes.OK).json({ message: "Debit note updated successfully", success: true, result: updated });
+    }),
+
+    deleteDebitNote: asyncHandler(async (req: CustomRequest, res: Response) => {
+        const userId = req.user?.id;
+        if (!userId) {
+            res.status(StatusCodes.UNAUTHORIZED);
+            throw new Error("User not authenticated");
+        }
+
+        const company = await findCompanyForUser(req.user);
+        const companyId = company?.id;
+        const id = Number(req.params.id);
+
+        const where: any = { id, isActive: true };
+        if (companyId) where.company_id = companyId;
+
+        const debitNote = await DebitNoteHeader.findOne({ where });
+        if (!debitNote) {
+            res.status(StatusCodes.NOT_FOUND);
+            throw new Error("Debit note not found");
+        }
+
+        if (debitNote.posting_status === "Posted") {
+            res.status(StatusCodes.BAD_REQUEST);
+            throw new Error("Cannot delete a posted debit note");
+        }
+
+        await debitNote.update({ isActive: false, updated_by: userId });
+        await DebitNoteLine.update({ isActive: false, updated_by: userId }, { where: { header_id: id } });
+
+        res.status(StatusCodes.OK).json({ message: "Debit note deleted successfully", success: true });
     }),
 };
 

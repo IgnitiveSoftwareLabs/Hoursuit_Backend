@@ -15,6 +15,7 @@ import VendorDetails from "../../../../modals/masters/vendorDetails/vendorDetail
 import ItemMaster from "../../../../modals/masters/items/itemMaster";
 import { InventoryService } from "../../../../utils/inventoryService";
 import { GLImpactService } from "../../../../utils/glImpactService";
+import { generateSequentialDocNumber } from "../../../../utils/documentNumberHelper";
 
 import ChartOfAccountMaster from "../../../../modals/masters/chartOfAccount/chartOfAccount";
 
@@ -82,18 +83,33 @@ const PurchaseReturnController = {
                 user_id,
             };
 
-            if (!headerPayload.returnNumber) {
-                const count = await PurchaseReturnHeader.count({ where: { companyId }, transaction });
-                let autoNo = `PR-${String(count + 1).padStart(4, "0")}`;
+            let autoReturnNo = String(header.returnNumber || "").trim();
+            if (!autoReturnNo || autoReturnNo.startsWith("PR-NEW") || autoReturnNo === "To Be Generated" || autoReturnNo.startsWith("PR-17")) {
+                autoReturnNo = await generateSequentialDocNumber(
+                    PurchaseReturnHeader,
+                    "returnNumber",
+                    "PR",
+                    "companyId",
+                    companyId,
+                    transaction
+                );
+            } else {
                 const exists = await PurchaseReturnHeader.findOne({
-                    where: { returnNumber: autoNo, companyId },
+                    where: { returnNumber: autoReturnNo, companyId },
                     transaction
                 });
                 if (exists) {
-                    autoNo = `PR-${Date.now()}`;
+                    autoReturnNo = await generateSequentialDocNumber(
+                        PurchaseReturnHeader,
+                        "returnNumber",
+                        "PR",
+                        "companyId",
+                        companyId,
+                        transaction
+                    );
                 }
-                headerPayload.returnNumber = autoNo;
             }
+            headerPayload.returnNumber = autoReturnNo;
 
             if (!headerPayload.vendorId) {
                 res.status(StatusCodes.BAD_REQUEST);

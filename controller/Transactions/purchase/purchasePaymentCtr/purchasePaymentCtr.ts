@@ -67,9 +67,9 @@ const PurchasePaymentController = {
                 const amountPaid = Number(line.amountPaid);
                 const invHeaderId = Number(line.purchaseInvoiceHeaderId || header.purchaseInvoiceHeaderId);
 
-                if (!amountPaid || amountPaid <= 0) {
+                if (amountPaid === undefined || amountPaid === null || isNaN(amountPaid) || amountPaid < 0) {
                     res.status(StatusCodes.BAD_REQUEST);
-                    throw new Error(`amountPaid must be greater than zero in payment line ${i + 1}`);
+                    throw new Error(`amountPaid must be a non-negative number in payment line ${i + 1}`);
                 }
 
                 // Verify or resolve purchaseInvoiceLineId to a real record in DB to prevent foreign key errors
@@ -166,9 +166,9 @@ const PurchasePaymentController = {
                 throw new Error("Valid paymentDate is required");
             }
 
-            if (!headerPayload.totalAmount || headerPayload.totalAmount <= 0) {
+            if (headerPayload.totalAmount === undefined || headerPayload.totalAmount === null || isNaN(headerPayload.totalAmount) || headerPayload.totalAmount < 0) {
                 res.status(StatusCodes.BAD_REQUEST);
-                throw new Error("Total payment amount must be greater than zero");
+                throw new Error("Total payment amount must be a non-negative number");
             }
 
             if (Number(headerPayload.totalAmount.toFixed(2)) !== Number(calculatedTotal.toFixed(2))) {
@@ -504,9 +504,9 @@ const PurchasePaymentController = {
                 const invHeaderId = Number(line.purchaseInvoiceHeaderId || header.purchaseInvoiceHeaderId || existingPayment.purchaseInvoiceHeaderId);
                 const amountPaid = Number(line.amountPaid);
 
-                if (!amountPaid || amountPaid <= 0) {
+                if (amountPaid === undefined || amountPaid === null || isNaN(amountPaid) || amountPaid < 0) {
                     res.status(StatusCodes.BAD_REQUEST);
-                    throw new Error(`amountPaid must be greater than zero in payment line ${i + 1}`);
+                    throw new Error(`amountPaid must be a non-negative number in payment line ${i + 1}`);
                 }
 
                 // Verify or resolve purchaseInvoiceLineId to a real record in DB to prevent foreign key errors

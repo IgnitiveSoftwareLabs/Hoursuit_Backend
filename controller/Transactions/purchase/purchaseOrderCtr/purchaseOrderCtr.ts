@@ -30,10 +30,26 @@ import {
     PurchaseOrderLine,
 } from "../../../../modals/Transactions/purchase/purchaseOrder";
 import CityMaster from "../../../../modals/masters/city/city";
+import StateCode from "../../../../modals/masters/state/state";
 import Godown from "../../../../modals/masters/godown/godown";
 import Stack from "../../../../modals/masters/stack/stack";
 import sequelize from "../../../../dbconfig/dbconfig";
 
+const formatAddressBookRecord = (addr: any) => {
+    if (!addr) return null;
+    const cityName = addr.city?.city_name || addr.city_name || "";
+    const stateName = addr.state?.state_name || addr.state_name || "";
+    const zip = addr.zip || "";
+    const cityStateZip = [cityName, stateName, zip].filter(Boolean).join(", ");
+    const lines = [
+        addr.attention ? `Attn: ${addr.attention}` : "",
+        addr.addressee || addr.label || "",
+        addr.addr1 || "",
+        addr.addr2 || "",
+        cityStateZip
+    ].filter(Boolean);
+    return lines.join("\n");
+};
 
 const normalizeOptionalId = (value: unknown) => {
     if (value === null || value === "" || value === undefined || value === "null" || value === "undefined") {
@@ -101,9 +117,57 @@ const PurchaseOrderController = {
                 autoPurchaseNo = `PO-${String(poCount + 1).padStart(4, "0")}`;
             }
 
+            let vendor_address_id = normalizeOptionalId(header.vendor_address_id);
+            let billing_address = header.billing_address ? String(header.billing_address).trim() : null;
+            const vendor_id = normalizeOptionalId(header.vendor_id);
+
+            // Auto-resolve billing address from vendor's address book or vendor master if not explicitly provided
+            if (!billing_address && (vendor_address_id || vendor_id)) {
+                if (vendor_address_id) {
+                    const addr = await VendorAddressBook.findByPk(vendor_address_id, {
+                        include: [
+                            { model: CityMaster, as: "city", attributes: ["id", "city_name"], required: false },
+                            { model: StateCode, as: "state", attributes: ["id", "state_name"], required: false }
+                        ],
+                        transaction
+                    });
+                    if (addr) {
+                        billing_address = formatAddressBookRecord(addr);
+                    }
+                }
+
+                if (!billing_address && vendor_id) {
+                    const defaultAddr = await VendorAddressBook.findOne({
+                        where: { vendor_id, default_billing: true },
+                        include: [
+                            { model: CityMaster, as: "city", attributes: ["id", "city_name"], required: false },
+                            { model: StateCode, as: "state", attributes: ["id", "state_name"], required: false }
+                        ],
+                        transaction
+                    }) || await VendorAddressBook.findOne({
+                        where: { vendor_id },
+                        include: [
+                            { model: CityMaster, as: "city", attributes: ["id", "city_name"], required: false },
+                            { model: StateCode, as: "state", attributes: ["id", "state_name"], required: false }
+                        ],
+                        transaction
+                    });
+
+                    if (defaultAddr) {
+                        vendor_address_id = defaultAddr.id;
+                        billing_address = formatAddressBookRecord(defaultAddr);
+                    } else {
+                        const vendorObj = await Vendor.findByPk(vendor_id, { transaction });
+                        if (vendorObj && vendorObj.address) {
+                            billing_address = vendorObj.address;
+                        }
+                    }
+                }
+            }
+
             const headerPayload: any = {
                 purchaseNo: autoPurchaseNo,
-                vendor_id: normalizeOptionalId(header.vendor_id),
+                vendor_id,
                 purchaseDate: header.purchaseDate ? new Date(header.purchaseDate) : null,
                 deliveryDate: header.deliveryDate ? new Date(header.deliveryDate) : null,
                 deliveredDate: header.deliveredDate ? new Date(header.deliveredDate) : null,
@@ -121,8 +185,8 @@ const PurchaseOrderController = {
                 stack_id: normalizeOptionalId(header.stack_id),
                 subsidiary_id: normalizeOptionalId(header.subsidiary_id),
                 currency_id: normalizeOptionalId(header.currency_id),
-                vendor_address_id: normalizeOptionalId(header.vendor_address_id),
-                billing_address: header.billing_address || null,
+                vendor_address_id,
+                billing_address,
                 class_id: normalizeOptionalId(header.class_id),
                 department_id: normalizeOptionalId(header.department_id),
                 status: normalizePurchaseOrderStatus(header.status, "DRAFT"),
@@ -130,10 +194,14 @@ const PurchaseOrderController = {
                 CompanyId,
                 user_id,
             };
-            // if (!headerPayload.customer_id) {
-            //     res.status(StatusCodes.BAD_REQUEST);
-            //     throw new Error("customer_id is required");
-            // }
+            if (!headerPayload.purchaseNo) {
+                res.status(StatusCodes.BAD_REQUEST);
+                throw new Error("purchaseNo is required");
+            }
+            if (!headerPayload.vendor_id) {
+                res.status(StatusCodes.BAD_REQUEST);
+                throw new Error("vendor is required");
+            }
             if (!headerPayload.purchaseDate || Number.isNaN(headerPayload.purchaseDate.getTime())) {
                 res.status(StatusCodes.BAD_REQUEST);
                 throw new Error("Valid purchaseDate is required");
@@ -426,7 +494,17 @@ const PurchaseOrderController = {
                 {
                     model: Vendor,
                     as: "vendor",
-                    attributes: ["id", "company_name"]
+                    attributes: ["id", "company_name", "first_name", "last_name", "salutation", "currency_id"],
+                    include: [
+                        { association: "addressBook", include: ["city", "state"] },
+                        { association: "currency" }
+                    ]
+                },
+                {
+                    model: VendorAddressBook,
+                    as: "vendorAddress",
+                    include: ["city", "state"],
+                    required: false,
                 },
                 {
                     model: CityMaster,
@@ -623,9 +701,57 @@ const PurchaseOrderController = {
                 throw new Error("Cannot update Purchase Order. Only DRAFT Purchase Orders can be updated.");
             }
 
+            let vendor_address_id = normalizeOptionalId(header.vendor_address_id ?? header.vendorAddressId);
+            let billing_address = header.billing_address ? String(header.billing_address).trim() : null;
+            const vendor_id = normalizeOptionalId(header.vendor_id ?? header.vendorId ?? existingPurchaseOrder.vendor_id);
+
+            // Auto-resolve billing address from vendor's address book or vendor master if not explicitly provided
+            if (!billing_address && (vendor_address_id || vendor_id)) {
+                if (vendor_address_id) {
+                    const addr = await VendorAddressBook.findByPk(vendor_address_id, {
+                        include: [
+                            { model: CityMaster, as: "city", attributes: ["id", "city_name"], required: false },
+                            { model: StateCode, as: "state", attributes: ["id", "state_name"], required: false }
+                        ],
+                        transaction
+                    });
+                    if (addr) {
+                        billing_address = formatAddressBookRecord(addr);
+                    }
+                }
+
+                if (!billing_address && vendor_id) {
+                    const defaultAddr = await VendorAddressBook.findOne({
+                        where: { vendor_id, default_billing: true },
+                        include: [
+                            { model: CityMaster, as: "city", attributes: ["id", "city_name"], required: false },
+                            { model: StateCode, as: "state", attributes: ["id", "state_name"], required: false }
+                        ],
+                        transaction
+                    }) || await VendorAddressBook.findOne({
+                        where: { vendor_id },
+                        include: [
+                            { model: CityMaster, as: "city", attributes: ["id", "city_name"], required: false },
+                            { model: StateCode, as: "state", attributes: ["id", "state_name"], required: false }
+                        ],
+                        transaction
+                    });
+
+                    if (defaultAddr) {
+                        vendor_address_id = defaultAddr.id;
+                        billing_address = formatAddressBookRecord(defaultAddr);
+                    } else {
+                        const vendorObj = await Vendor.findByPk(vendor_id, { transaction });
+                        if (vendorObj && vendorObj.address) {
+                            billing_address = vendorObj.address;
+                        }
+                    }
+                }
+            }
+
             const headerPayload: any = {
                 purchaseNo: String(header.purchaseNo || "").trim(),
-                // customer_id: Number(header.customer_id),
+                vendor_id,
                 purchaseDate: header.purchaseDate ? new Date(header.purchaseDate) : null,
                 deliveryDate: header.deliveryDate ? new Date(header.deliveryDate) : null,
                 deliveredDate: header.deliveredDate ? new Date(header.deliveredDate) : null,
@@ -643,8 +769,8 @@ const PurchaseOrderController = {
                 stack_id: normalizeOptionalId(header.stack_id),
                 subsidiary_id: normalizeOptionalId(header.subsidiary_id),
                 currency_id: normalizeOptionalId(header.currency_id),
-                vendor_address_id: normalizeOptionalId(header.vendor_address_id),
-                billing_address: header.billing_address || null,
+                vendor_address_id,
+                billing_address,
                 class_id: normalizeOptionalId(header.class_id),
                 department_id: normalizeOptionalId(header.department_id),
                 status: normalizePurchaseOrderStatus(header.status || existingPurchaseOrder.status, existingPurchaseOrder.status || "DRAFT"),
@@ -658,10 +784,10 @@ const PurchaseOrderController = {
                 res.status(StatusCodes.BAD_REQUEST);
                 throw new Error("purchaseNo is required");
             }
-            // if (!headerPayload.customer_id) {
-            //     res.status(StatusCodes.BAD_REQUEST);
-            //     throw new Error("customer_id is required");
-            // }
+            if (!headerPayload.vendor_id) {
+                res.status(StatusCodes.BAD_REQUEST);
+                throw new Error("vendor is required");
+            }
             if (!headerPayload.purchaseDate || Number.isNaN(headerPayload.purchaseDate.getTime())) {
                 res.status(StatusCodes.BAD_REQUEST);
                 throw new Error("Valid purchaseDate is required");

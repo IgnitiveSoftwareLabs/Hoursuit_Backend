@@ -12,6 +12,7 @@ import VendorCreditBillApply from "../../../../modals/Transactions/purchase/vend
 import VendorDetails from "../../../../modals/masters/vendorDetails/vendorDetails";
 import ChartOfAccountMaster from "../../../../modals/masters/chartOfAccount/chartOfAccount";
 import { GLImpactService } from "../../../../utils/glImpactService";
+import { generateSequentialDocNumber } from "../../../../utils/documentNumberHelper";
 
 export const VendorRefundController = {
     createVendorRefund: asyncHandler(async (req: CustomRequest, res: Response) => {
@@ -83,7 +84,32 @@ export const VendorRefundController = {
                 );
             }
 
-            const refundNumber = `VR-${Date.now()}`;
+            let refundNumber = String(req.body.refundNumber || "").trim();
+            if (!refundNumber || refundNumber.startsWith("VR-NEW") || refundNumber === "To Be Generated" || refundNumber.startsWith("VR-17")) {
+                refundNumber = await generateSequentialDocNumber(
+                    VendorRefundHeader,
+                    "refundNumber",
+                    "VR",
+                    "companyId",
+                    companyId,
+                    transaction
+                );
+            } else {
+                const exists = await VendorRefundHeader.findOne({
+                    where: { refundNumber, companyId },
+                    transaction
+                });
+                if (exists) {
+                    refundNumber = await generateSequentialDocNumber(
+                        VendorRefundHeader,
+                        "refundNumber",
+                        "VR",
+                        "companyId",
+                        companyId,
+                        transaction
+                    );
+                }
+            }
 
             const vendorRefund = await VendorRefundHeader.create({
                 companyId,

@@ -15,8 +15,10 @@ import { PurchaseReturnHeader, PurchaseReturnLine } from "../../../../modals/Tra
 import PurchaseReturnFulfillmentLine from "../../../../modals/Transactions/purchase/purchaseReturn/purchaseReturnFulfillmentLine";
 import PurchaseReturnFulfillmentHeader from "../../../../modals/Transactions/purchase/purchaseReturn/purchaseReturnFulfillmentHeader";
 import ItemMaster from "../../../../modals/masters/items/itemMaster";
+import CityMaster from "../../../../modals/masters/city/city";
 import VendorDetails from "../../../../modals/masters/vendorDetails/vendorDetails";
 import { GLImpactService } from "../../../../utils/glImpactService";
+import { generateSequentialDocNumber } from "../../../../utils/documentNumberHelper";
 
 export const VendorCreditController = {
     createVendorCredit: asyncHandler(async (req: CustomRequest, res: Response) => {
@@ -48,7 +50,32 @@ export const VendorCreditController = {
                 throw new Error("vendorId is required");
             }
 
-            const creditNoteNumber = String(header.creditNoteNumber || `VC-${Date.now()}`).trim();
+            let creditNoteNumber = String(header.creditNoteNumber || "").trim();
+            if (!creditNoteNumber || creditNoteNumber.startsWith("VC-NEW") || creditNoteNumber === "To Be Generated" || creditNoteNumber.startsWith("VC-17")) {
+                creditNoteNumber = await generateSequentialDocNumber(
+                    VendorCreditHeader,
+                    "creditNoteNumber",
+                    "VC",
+                    "companyId",
+                    companyId,
+                    transaction
+                );
+            } else {
+                const exists = await VendorCreditHeader.findOne({
+                    where: { creditNoteNumber, companyId },
+                    transaction
+                });
+                if (exists) {
+                    creditNoteNumber = await generateSequentialDocNumber(
+                        VendorCreditHeader,
+                        "creditNoteNumber",
+                        "VC",
+                        "companyId",
+                        companyId,
+                        transaction
+                    );
+                }
+            }
             const creditDate = header.creditDate ? new Date(header.creditDate) : new Date();
 
             let totalSubtotal = 0;
@@ -57,15 +84,25 @@ export const VendorCreditController = {
             let totalHeaderAmount = 0;
             const preparedLines: any[] = [];
 
+            let fallbackItemId: number | null = null;
+
             for (let index = 0; index < lineItems.length; index++) {
                 const line = lineItems[index];
-                const creditQty = Number(line.creditQty);
-                const unitPrice = Number(line.unitPrice);
+                const creditQty = Number(line.creditQty || 1);
+                const unitPrice = Number(line.unitPrice !== undefined && line.unitPrice !== null ? line.unitPrice : 0);
 
-                if (!line.itemId) {
-                    res.status(StatusCodes.BAD_REQUEST);
-                    throw new Error(`itemId is required in line ${index + 1}`);
+                let itemId = Number(line.itemId || line.item_id || line.ItemMasterId);
+                if (!itemId) {
+                    if (!fallbackItemId) {
+                        const defaultItem = await ItemMaster.findOne({
+                            where: { isActive: true },
+                            transaction
+                        }) || await ItemMaster.findOne({ transaction });
+                        fallbackItemId = defaultItem?.id || 1;
+                    }
+                    itemId = fallbackItemId;
                 }
+
                 if (!creditQty || creditQty <= 0) {
                     res.status(StatusCodes.BAD_REQUEST);
                     throw new Error(`creditQty must be greater than zero in line ${index + 1}`);
@@ -135,9 +172,12 @@ export const VendorCreditController = {
                 totalTax += taxAmount;
                 totalHeaderAmount += lineTotal;
 
+                const location_id = line.location_id ? Number(line.location_id) : (header.location_id ? Number(header.location_id) : null);
+
                 preparedLines.push({
                     purchaseReturnLineId,
-                    itemId: Number(line.itemId),
+                    itemId,
+                    location_id,
                     creditQty,
                     unitPrice,
                     discountPercent,
@@ -181,15 +221,78 @@ export const VendorCreditController = {
             }
 
             // Post Vendor Credit GL Entry (DR Accounts Payable, CR Purchase Return Clearing)
+            const apAccountId = header.accountId || header.account_id || header.apAccountId ? Number(header.accountId || header.account_id || header.apAccountId) : undefined;
             await GLImpactService.processVendorCreditPosting(
                 vendorCreditHeader.id,
                 companyId,
                 user_id,
                 undefined,
-                undefined,
+                apAccountId,
                 undefined,
                 transaction
             );
+
+            // Process optional billApplications provided during creation
+            let rawBillApps = req.body.billApplications || header.billApplications || req.body.appliedBills;
+            if (typeof rawBillApps === "string") {
+                try { rawBillApps = JSON.parse(rawBillApps); } catch (e) { }
+            }
+            const createdApplies: any[] = [];
+            let totalAppliedOnCreate = 0;
+
+            if (Array.isArray(rawBillApps) && rawBillApps.length > 0) {
+                for (const app of rawBillApps) {
+                    const billId = Number(app.purchaseInvoiceId || app.billId);
+                    const amount = Number(Number(app.amountToApply || app.appliedAmount || 0).toFixed(2));
+
+                    if (!billId || amount <= 0) continue;
+
+                    const bill = await PurchaseInvoiceHeader.findOne({
+                        where: { id: billId, companyId },
+                        transaction,
+                    });
+
+                    if (!bill) continue;
+
+                    const currentTotal = Number(bill.totalAmount || 0);
+                    const currentPaid = Number(bill.paidAmount || 0);
+                    const currentBal = bill.balanceAmount !== null && bill.balanceAmount !== undefined
+                        ? Number(bill.balanceAmount)
+                        : (currentTotal - currentPaid);
+
+                    const actualApply = Math.min(amount, Math.max(0, currentBal));
+                    if (actualApply <= 0) continue;
+
+                    const newPaid = Number((currentPaid + actualApply).toFixed(2));
+                    const newBal = Math.max(0, Number((currentTotal - newPaid).toFixed(2)));
+                    const newStatus = newBal <= 0.01 ? "PAID" : "PARTIAL_PAID";
+
+                    await bill.update({
+                        paidAmount: newPaid,
+                        balanceAmount: newBal,
+                        status: newStatus,
+                    }, { transaction });
+
+                    const billApply = await VendorCreditBillApply.create({
+                        companyId,
+                        vendorCreditId: vendorCreditHeader.id,
+                        purchaseInvoiceId: bill.id,
+                        appliedAmount: actualApply,
+                        applyDate: creditDate,
+                        remarks: app.remarks || header.remarks || "Applied on Vendor Credit creation",
+                        user_id,
+                    }, { transaction });
+
+                    createdApplies.push(billApply);
+                    totalAppliedOnCreate = Number((totalAppliedOnCreate + actualApply).toFixed(2));
+                }
+
+                if (totalAppliedOnCreate > 0) {
+                    await vendorCreditHeader.update({
+                        appliedAmount: totalAppliedOnCreate,
+                    }, { transaction });
+                }
+            }
 
             // Update parent PurchaseReturnHeader status to RETURNED if fully credited
             if (vendorCreditHeader.purchaseReturnHeaderId) {
@@ -232,7 +335,9 @@ export const VendorCreditController = {
                 message: "Vendor credit created and posted to GL successfully",
                 result: {
                     header: vendorCreditHeader,
-                    lineItems: createdLines
+                    lineItems: createdLines,
+                    billApplications: createdApplies,
+                    appliedAmount: totalAppliedOnCreate,
                 }
             });
         } catch (error) {
@@ -266,8 +371,16 @@ export const VendorCreditController = {
                 {
                     model: VendorCreditLine,
                     as: "creditLines",
-                    include: [{ model: ItemMaster, as: "item", attributes: ["id", "item_code", "item_name"] }]
-                }
+                    include: [
+                        { model: ItemMaster, as: "item", attributes: ["id", "item_code", "item_name"] },
+                        { model: CityMaster, as: "location", attributes: ["id", "city_name"] }
+                    ]
+                },
+                {
+                    model: VendorCreditBillApply,
+                    as: "billApplies",
+                    required: false,
+                },
             ],
             offset,
             limit: Number(limit),
@@ -281,6 +394,14 @@ export const VendorCreditController = {
                 row.vendor.vendor_name = vendorName;
             }
             row.vendor_name = vendorName;
+
+            const total = Number(row.totalAmount || 0);
+            const appliedFromApplies = (row.billApplies || []).reduce((sum: number, a: any) => sum + Number(a.appliedAmount || 0), 0);
+            const applied = Number(Math.max(appliedFromApplies, Number(row.appliedAmount || 0)).toFixed(2));
+            const refunded = Number(Number(row.refundedAmount || 0).toFixed(2));
+            row.appliedAmount = applied;
+            row.refundedAmount = refunded;
+            row.availableCredit = Math.max(0, Number((total - (applied + refunded)).toFixed(2)));
             return row;
         });
 
@@ -315,8 +436,16 @@ export const VendorCreditController = {
                 {
                     model: VendorCreditLine,
                     as: "creditLines",
-                    include: [{ model: ItemMaster, as: "item" }]
-                }
+                    include: [
+                        { model: ItemMaster, as: "item" },
+                        { model: CityMaster, as: "location" }
+                    ]
+                },
+                {
+                    model: VendorCreditBillApply,
+                    as: "billApplies",
+                    required: false,
+                },
             ]
         });
 
@@ -331,6 +460,14 @@ export const VendorCreditController = {
             creditJson.vendor.vendor_name = vendorName;
         }
         creditJson.vendor_name = vendorName;
+
+        const total = Number(creditJson.totalAmount || 0);
+        const appliedFromApplies = (creditJson.billApplies || []).reduce((sum: number, a: any) => sum + Number(a.appliedAmount || 0), 0);
+        const applied = Number(Math.max(appliedFromApplies, Number(creditJson.appliedAmount || 0)).toFixed(2));
+        const refunded = Number(Number(creditJson.refundedAmount || 0).toFixed(2));
+        creditJson.appliedAmount = applied;
+        creditJson.refundedAmount = refunded;
+        creditJson.availableCredit = Math.max(0, Number((total - (applied + refunded)).toFixed(2)));
 
         res.status(StatusCodes.OK).json({
             success: true,
@@ -419,15 +556,19 @@ export const VendorCreditController = {
                 where: { vendorCreditId: vendorCredit.id, companyId },
                 transaction,
             });
-            const alreadyApplied = existingApplies.reduce((sum, a) => sum + Number(a.appliedAmount || 0), 0);
+            const alreadyAppliedFromApplies = existingApplies.reduce((sum, a) => sum + Number(a.appliedAmount || 0), 0);
+            const alreadyApplied = Math.max(alreadyAppliedFromApplies, Number(vendorCredit.appliedAmount || 0));
 
             const existingRefunds = await VendorRefundHeader.findAll({
                 where: { vendorCreditId: vendorCredit.id, companyId, status: { [Op.ne]: "CANCELLED" } },
                 transaction,
             });
-            const alreadyRefunded = existingRefunds.reduce((sum, r) => sum + Number(r.refundAmount || 0), 0);
+            const alreadyRefunded = Math.max(
+                existingRefunds.reduce((sum, r) => sum + Number(r.refundAmount || 0), 0),
+                Number(vendorCredit.refundedAmount || 0)
+            );
 
-            const availableCredit = Number((totalCreditAmount - (alreadyApplied + alreadyRefunded)).toFixed(2));
+            const availableCredit = Math.max(0, Number((totalCreditAmount - (alreadyApplied + alreadyRefunded)).toFixed(2)));
 
             const totalApplyingNow = Number(
                 billApplications.reduce((sum: number, b: any) => sum + Number(b.amountToApply || 0), 0).toFixed(2)
@@ -579,12 +720,13 @@ export const VendorCreditController = {
             where: {
                 companyId,
                 vendorId: Number(vendorId),
-                status: "POSTED",
+                status: { [Op.ne]: "CANCELLED" },
             },
             include: [
                 {
                     model: VendorCreditBillApply,
                     as: "billApplies",
+                    required: false,
                 },
                 {
                     model: VendorRefundHeader,
@@ -598,9 +740,15 @@ export const VendorCreditController = {
 
         const activeCredits = credits.map((c: any) => {
             const total = Number(c.totalAmount || 0);
-            const applied = (c.billApplies || []).reduce((sum: number, a: any) => sum + Number(a.appliedAmount || 0), 0);
-            const refunded = (c.refunds || []).reduce((sum: number, r: any) => sum + Number(r.refundAmount || 0), 0);
-            const available = Number((total - (applied + refunded)).toFixed(2));
+            const appliedFromApplies = (c.billApplies || []).reduce((sum: number, a: any) => sum + Number(a.appliedAmount || 0), 0);
+            const appliedFromHeader = Number(c.appliedAmount || 0);
+            const applied = Number(Math.max(appliedFromApplies, appliedFromHeader).toFixed(2));
+
+            const refundedFromRefunds = (c.refunds || []).reduce((sum: number, r: any) => sum + Number(r.refundAmount || 0), 0);
+            const refundedFromHeader = Number(c.refundedAmount || 0);
+            const refunded = Number(Math.max(refundedFromRefunds, refundedFromHeader).toFixed(2));
+
+            const available = Math.max(0, Number((total - (applied + refunded)).toFixed(2)));
             return {
                 id: c.id,
                 creditNoteNumber: c.creditNoteNumber,
@@ -610,6 +758,7 @@ export const VendorCreditController = {
                 refundedAmount: refunded,
                 availableCredit: available,
                 remarks: c.remarks,
+                status: c.status,
             };
         }).filter((c) => c.availableCredit > 0.01);
 
@@ -699,15 +848,19 @@ export const VendorCreditController = {
                     where: { vendorCreditId: vendorCredit.id, companyId },
                     transaction,
                 });
-                const alreadyApplied = existingApplies.reduce((sum, a) => sum + Number(a.appliedAmount || 0), 0);
+                const alreadyAppliedFromApplies = existingApplies.reduce((sum, a) => sum + Number(a.appliedAmount || 0), 0);
+                const alreadyApplied = Math.max(alreadyAppliedFromApplies, Number(vendorCredit.appliedAmount || 0));
 
                 const existingRefunds = await VendorRefundHeader.findAll({
                     where: { vendorCreditId: vendorCredit.id, companyId, status: { [Op.ne]: "CANCELLED" } },
                     transaction,
                 });
-                const alreadyRefunded = existingRefunds.reduce((sum, r) => sum + Number(r.refundAmount || 0), 0);
+                const alreadyRefunded = Math.max(
+                    existingRefunds.reduce((sum, r) => sum + Number(r.refundAmount || 0), 0),
+                    Number(vendorCredit.refundedAmount || 0)
+                );
 
-                const availableCredit = Number((totalCreditAmount - (alreadyApplied + alreadyRefunded)).toFixed(2));
+                const availableCredit = Math.max(0, Number((totalCreditAmount - (alreadyApplied + alreadyRefunded)).toFixed(2)));
 
                 if (amount > availableCredit) {
                     res.status(StatusCodes.BAD_REQUEST);
@@ -795,6 +948,63 @@ export const VendorCreditController = {
         else if (header.reason !== undefined) vendorCredit.remarks = header.reason;
         if (header.status !== undefined && ["DRAFT", "APPROVED", "OPEN", "POSTED"].includes(header.status)) {
             vendorCredit.status = header.status;
+        }
+
+        const lineItems = req.body.lineItems || req.body.lines || req.body.details;
+        if (Array.isArray(lineItems) && lineItems.length > 0) {
+            await VendorCreditLine.destroy({ where: { creditHeaderId: vendorCredit.id } });
+            let totalSubtotal = 0;
+            let totalDiscount = 0;
+            let totalTax = 0;
+            let totalHeaderAmount = 0;
+
+            for (const line of lineItems) {
+                const creditQty = Number(line.creditQty || 1);
+                const unitPrice = Number(line.unitPrice !== undefined && line.unitPrice !== null ? line.unitPrice : 0);
+                const itemId = Number(line.itemId || line.item_id || 1);
+                const grossLineAmount = Number((creditQty * unitPrice).toFixed(2));
+                const discountPercent = Number(line.discountPercent || 0);
+                let discountAmount = Number(line.discountAmount || 0);
+                if (discountPercent > 0 && discountAmount === 0) {
+                    discountAmount = Number(((grossLineAmount * discountPercent) / 100).toFixed(2));
+                }
+                const taxableLineAmount = Math.max(0, Number((grossLineAmount - discountAmount).toFixed(2)));
+                const taxPercent = Number(line.taxPercent || 0);
+                let taxAmount = Number(line.taxAmount || 0);
+                if (taxPercent > 0 && taxAmount === 0) {
+                    taxAmount = Number(((taxableLineAmount * taxPercent) / 100).toFixed(2));
+                }
+                const lineTotal = line.totalAmount !== undefined && line.totalAmount !== null && Number(line.totalAmount) > 0
+                    ? Number(Number(line.totalAmount).toFixed(2))
+                    : Number((taxableLineAmount + taxAmount).toFixed(2));
+
+                totalSubtotal += grossLineAmount;
+                totalDiscount += discountAmount;
+                totalTax += taxAmount;
+                totalHeaderAmount += lineTotal;
+
+                const location_id = line.location_id ? Number(line.location_id) : (header.location_id ? Number(header.location_id) : null);
+
+                await VendorCreditLine.create({
+                    creditHeaderId: vendorCredit.id,
+                    purchaseReturnLineId: line.purchaseReturnLineId ? Number(line.purchaseReturnLineId) : null,
+                    itemId,
+                    location_id,
+                    creditQty,
+                    unitPrice,
+                    discountPercent,
+                    discountAmount,
+                    taxPercent,
+                    taxAmount,
+                    totalAmount: lineTotal,
+                    remarks: line.remarks || null
+                });
+            }
+
+            vendorCredit.subtotal = totalSubtotal > 0 ? totalSubtotal : vendorCredit.subtotal;
+            vendorCredit.discountAmount = totalDiscount > 0 ? totalDiscount : vendorCredit.discountAmount;
+            vendorCredit.taxAmount = totalTax > 0 ? totalTax : vendorCredit.taxAmount;
+            vendorCredit.totalAmount = totalHeaderAmount > 0 ? totalHeaderAmount : vendorCredit.totalAmount;
         }
 
         await vendorCredit.save();

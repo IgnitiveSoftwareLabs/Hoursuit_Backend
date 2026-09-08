@@ -11,8 +11,10 @@ import PurchaseReturnFulfillmentHeader from "../../../../modals/Transactions/pur
 import PurchaseReturnFulfillmentLine from "../../../../modals/Transactions/purchase/purchaseReturn/purchaseReturnFulfillmentLine";
 import ItemMaster from "../../../../modals/masters/items/itemMaster";
 import VendorDetails from "../../../../modals/masters/vendorDetails/vendorDetails";
+import InventoryCount from "../../../../modals/inventory/inventory";
 import { InventoryService } from "../../../../utils/inventoryService";
 import { GLImpactService } from "../../../../utils/glImpactService";
+import { generateSequentialDocNumber } from "../../../../utils/documentNumberHelper";
 
 export const PurchaseReturnFulfillmentController = {
     createFulfillment: asyncHandler(async (req: CustomRequest, res: Response) => {
@@ -68,7 +70,32 @@ export const PurchaseReturnFulfillmentController = {
                 throw new Error(`Purchase Return #${parentReturn.returnNumber || parentReturn.id} is already FULFILLED and cannot be fulfilled again.`);
             }
 
-            const fulfillmentNumber = String(header.fulfillmentNumber || `PRF-${Date.now()}`).trim();
+            let fulfillmentNumber = String(header.fulfillmentNumber || "").trim();
+            if (!fulfillmentNumber || fulfillmentNumber.startsWith("PRF-NEW") || fulfillmentNumber === "To Be Generated" || fulfillmentNumber.startsWith("PRF-17")) {
+                fulfillmentNumber = await generateSequentialDocNumber(
+                    PurchaseReturnFulfillmentHeader,
+                    "fulfillmentNumber",
+                    "PRF",
+                    "companyId",
+                    companyId,
+                    transaction
+                );
+            } else {
+                const exists = await PurchaseReturnFulfillmentHeader.findOne({
+                    where: { fulfillmentNumber, companyId },
+                    transaction
+                });
+                if (exists) {
+                    fulfillmentNumber = await generateSequentialDocNumber(
+                        PurchaseReturnFulfillmentHeader,
+                        "fulfillmentNumber",
+                        "PRF",
+                        "companyId",
+                        companyId,
+                        transaction
+                    );
+                }
+            }
             const fulfillmentDate = header.fulfillmentDate ? new Date(header.fulfillmentDate) : new Date();
 
             const fulfillmentHeader = await PurchaseReturnFulfillmentHeader.create({
@@ -131,14 +158,46 @@ export const PurchaseReturnFulfillmentController = {
                 }
 
                 const unitPrice = line.unitPrice !== undefined ? Number(line.unitPrice) : Number(parentLine.unitPrice || 0);
+                const resolvedWarehouseId = line.warehouseId ? Number(line.warehouseId) : (header.location_id ? Number(header.location_id) : null);
+                const targetItemId = Number(line.itemId || parentLine.itemId);
+
+                // Check on-hand stock for this item in warehouse/company
+                const inventoryWhere: any = {
+                    item_id: targetItemId,
+                    CompanyId: companyId
+                };
+                if (resolvedWarehouseId) {
+                    inventoryWhere.warehouseId = resolvedWarehouseId;
+                }
+
+                const invRecords = await InventoryCount.findAll({
+                    where: inventoryWhere,
+                    transaction
+                });
+
+                const currentOnHand = invRecords.reduce((sum, inv) => sum + Number(inv.qty || 0), 0);
+
+                if (currentOnHand <= 0) {
+                    const itObj = await ItemMaster.findByPk(targetItemId, { transaction });
+                    const itName = itObj?.item_name || `Item #${targetItemId}`;
+                    res.status(StatusCodes.BAD_REQUEST);
+                    throw new Error(`Cannot fulfill return for "${itName}": On-hand stock is 0 at the selected location.`);
+                }
+
+                if (fulfilledQty > currentOnHand) {
+                    const itObj = await ItemMaster.findByPk(targetItemId, { transaction });
+                    const itName = itObj?.item_name || `Item #${targetItemId}`;
+                    res.status(StatusCodes.BAD_REQUEST);
+                    throw new Error(`Cannot fulfill ${fulfilledQty} units for "${itName}": Available on-hand stock is only ${currentOnHand} at the selected location.`);
+                }
 
                 const createdLine = await PurchaseReturnFulfillmentLine.create({
                     fulfillmentHeaderId: fulfillmentHeader.id,
                     purchaseReturnLineId,
-                    itemId: Number(line.itemId || parentLine.itemId),
+                    itemId: targetItemId,
                     fulfilledQty,
                     unitPrice,
-                    warehouseId: line.warehouseId ? Number(line.warehouseId) : null,
+                    warehouseId: resolvedWarehouseId,
                     batchNo: line.batchNo || parentLine.batchNo || null,
                     remarks: line.remarks || null
                 }, { transaction });

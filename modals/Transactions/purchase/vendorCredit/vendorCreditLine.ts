@@ -1,6 +1,7 @@
 import { Model, DataTypes, Optional } from "sequelize";
 import sequelize from "../../../../dbconfig/dbconfig";
 import ItemMaster from "../../../masters/items/itemMaster";
+import CityMaster from "../../../masters/city/city";
 import VendorCreditHeader from "./vendorCreditHeader";
 import PurchaseReturnLine from "../purchaseReturn/purchaseReturnLine";
 
@@ -9,6 +10,7 @@ export interface VendorCreditLineAttributes {
     creditHeaderId: number;
     purchaseReturnLineId?: number | null;
     itemId: number;
+    location_id?: number | null;
     creditQty: number;
     unitPrice: number;
     discountPercent?: number | null;
@@ -26,6 +28,7 @@ export interface VendorCreditLineCreationAttributes
         VendorCreditLineAttributes,
         | "id"
         | "purchaseReturnLineId"
+        | "location_id"
         | "discountPercent"
         | "discountAmount"
         | "taxPercent"
@@ -45,6 +48,7 @@ export class VendorCreditLine
     public creditHeaderId!: number;
     public purchaseReturnLineId!: number | null;
     public itemId!: number;
+    public location_id!: number | null;
     public creditQty!: number;
     public unitPrice!: number;
     public discountPercent!: number | null;
@@ -75,6 +79,10 @@ VendorCreditLine.init(
         itemId: {
             type: DataTypes.INTEGER,
             allowNull: false,
+        },
+        location_id: {
+            type: DataTypes.INTEGER,
+            allowNull: true,
         },
         creditQty: {
             type: DataTypes.DECIMAL(15, 4),
@@ -130,5 +138,6 @@ VendorCreditLine.belongsTo(PurchaseReturnLine, { foreignKey: "purchaseReturnLine
 PurchaseReturnLine.hasMany(VendorCreditLine, { foreignKey: "purchaseReturnLineId", as: "vendorCreditLines", onDelete: "CASCADE" });
 
 VendorCreditLine.belongsTo(ItemMaster, { foreignKey: "itemId", as: "item", onDelete: "CASCADE" });
+VendorCreditLine.belongsTo(CityMaster, { foreignKey: "location_id", as: "location", onDelete: "SET NULL" });
 
 export default VendorCreditLine;
