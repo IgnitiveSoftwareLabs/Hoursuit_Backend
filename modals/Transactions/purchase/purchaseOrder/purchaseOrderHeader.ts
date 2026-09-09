@@ -43,6 +43,7 @@ interface PurchaseOrderAttributes {
     department_id?: number | null;
     user_id: number;
     status: string;
+    isActive?: boolean;
     remarks?: string | null;
     CompanyId: number;
     createdAt?: Date;
@@ -77,6 +78,7 @@ class PurchaseOrder extends Model<PurchaseOrderAttributes, PurchaseOrderCreation
     public class_id?: number | null;
     public department_id?: number | null;
     public status!: string;
+    public isActive!: boolean;
     public user_id!: number;
     public remarks?: string | null;
     public CompanyId!: number;
@@ -234,6 +236,11 @@ PurchaseOrder.init(
         user_id: {
             type: DataTypes.BIGINT,
             allowNull: false,
+        },
+        isActive: {
+            type: DataTypes.BOOLEAN,
+            allowNull: false,
+            defaultValue: true,
         },
         remarks: {
             type: DataTypes.STRING,

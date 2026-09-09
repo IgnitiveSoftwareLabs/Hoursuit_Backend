@@ -9,7 +9,11 @@ import { findCompanyForUser } from "../../../../utils/findCompanyForUser";
 import { PurchaseReturnHeader, PurchaseReturnLine } from "../../../../modals/Transactions/purchase/purchaseReturn";
 import PurchaseReturnFulfillmentHeader from "../../../../modals/Transactions/purchase/purchaseReturn/purchaseReturnFulfillmentHeader";
 import PurchaseReturnFulfillmentLine from "../../../../modals/Transactions/purchase/purchaseReturn/purchaseReturnFulfillmentLine";
+import { PurchaseOrder } from "../../../../modals/Transactions/purchase/purchaseOrder";
+import { GRN } from "../../../../modals/Transactions/purchase/GRN";
+import { PurchaseInvoiceHeader } from "../../../../modals/Transactions/purchase/purchaseInvoice";
 import ItemMaster from "../../../../modals/masters/items/itemMaster";
+import CityMaster from "../../../../modals/masters/city/city";
 import VendorDetails from "../../../../modals/masters/vendorDetails/vendorDetails";
 import InventoryCount from "../../../../modals/inventory/inventory";
 import { InventoryService } from "../../../../utils/inventoryService";
@@ -68,6 +72,46 @@ export const PurchaseReturnFulfillmentController = {
             if (parentStatus === "FULFILLED") {
                 res.status(StatusCodes.BAD_REQUEST);
                 throw new Error(`Purchase Return #${parentReturn.returnNumber || parentReturn.id} is already FULFILLED and cannot be fulfilled again.`);
+            }
+
+            if (parentReturn.purchaseOrderHeaderId) {
+                const po = await PurchaseOrder.findOne({ where: { id: parentReturn.purchaseOrderHeaderId, CompanyId: companyId }, transaction });
+                if (po && po.isActive === false) {
+                    res.status(StatusCodes.BAD_REQUEST);
+                    throw new Error(`Cannot fulfill Purchase Return #${parentReturn.returnNumber || parentReturn.id} because referenced Purchase Order ${po.purchaseNo || po.id} is deactivated/inactive.`);
+                }
+            }
+            if (parentReturn.grnHeaderId) {
+                const grn = await GRN.findOne({ where: { id: parentReturn.grnHeaderId, CompanyId: companyId }, transaction });
+                if (grn && grn.purchaseOrderId) {
+                    const po = await PurchaseOrder.findOne({ where: { id: grn.purchaseOrderId, CompanyId: companyId }, transaction });
+                    if (po && po.isActive === false) {
+                        res.status(StatusCodes.BAD_REQUEST);
+                        throw new Error(`Cannot fulfill Purchase Return #${parentReturn.returnNumber || parentReturn.id} because referenced Purchase Order ${po.purchaseNo || po.id} is deactivated/inactive.`);
+                    }
+                }
+            }
+            if (parentReturn.purchaseInvoiceHeaderId) {
+                const inv = await PurchaseInvoiceHeader.findOne({ where: { id: parentReturn.purchaseInvoiceHeaderId, companyId }, transaction });
+                if (inv) {
+                    if (inv.poHeaderId) {
+                        const po = await PurchaseOrder.findOne({ where: { id: inv.poHeaderId, CompanyId: companyId }, transaction });
+                        if (po && po.isActive === false) {
+                            res.status(StatusCodes.BAD_REQUEST);
+                            throw new Error(`Cannot fulfill Purchase Return #${parentReturn.returnNumber || parentReturn.id} because referenced Purchase Order ${po.purchaseNo || po.id} is deactivated/inactive.`);
+                        }
+                    }
+                    if (inv.grnHeaderId) {
+                        const grn = await GRN.findOne({ where: { id: inv.grnHeaderId, CompanyId: companyId }, transaction });
+                        if (grn && grn.purchaseOrderId) {
+                            const po = await PurchaseOrder.findOne({ where: { id: grn.purchaseOrderId, CompanyId: companyId }, transaction });
+                            if (po && po.isActive === false) {
+                                res.status(StatusCodes.BAD_REQUEST);
+                                throw new Error(`Cannot fulfill Purchase Return #${parentReturn.returnNumber || parentReturn.id} because referenced Purchase Order ${po.purchaseNo || po.id} is deactivated/inactive.`);
+                            }
+                        }
+                    }
+                }
             }
 
             let fulfillmentNumber = String(header.fulfillmentNumber || "").trim();
@@ -161,19 +205,43 @@ export const PurchaseReturnFulfillmentController = {
                 const resolvedWarehouseId = line.warehouseId ? Number(line.warehouseId) : (header.location_id ? Number(header.location_id) : null);
                 const targetItemId = Number(line.itemId || parentLine.itemId);
 
-                // Check on-hand stock for this item in warehouse/company
-                const inventoryWhere: any = {
-                    item_id: targetItemId,
-                    CompanyId: companyId
-                };
+                let targetLocationName: string | null = null;
                 if (resolvedWarehouseId) {
-                    inventoryWhere.warehouseId = resolvedWarehouseId;
+                    const city = await CityMaster.findByPk(resolvedWarehouseId, { transaction });
+                    if (city) {
+                        targetLocationName = city.city_name || (city as any).name;
+                    }
                 }
 
-                const invRecords = await InventoryCount.findAll({
+                // Check on-hand stock for this item in this location / company
+                const inventoryWhere: any = {
+                    item_id: targetItemId,
+                    CompanyId: companyId,
+                    isActive: true,
+                };
+                if (targetLocationName) {
+                    inventoryWhere[Op.or] = [
+                        { location: targetLocationName },
+                        { location: String(resolvedWarehouseId) }
+                    ];
+                }
+
+                let invRecords = await InventoryCount.findAll({
                     where: inventoryWhere,
                     transaction
                 });
+
+                // If no records found with specific location, fallback to all company stock for this item
+                if (invRecords.length === 0) {
+                    invRecords = await InventoryCount.findAll({
+                        where: {
+                            item_id: targetItemId,
+                            CompanyId: companyId,
+                            isActive: true
+                        },
+                        transaction
+                    });
+                }
 
                 const currentOnHand = invRecords.reduce((sum, inv) => sum + Number(inv.qty || 0), 0);
 
@@ -181,14 +249,14 @@ export const PurchaseReturnFulfillmentController = {
                     const itObj = await ItemMaster.findByPk(targetItemId, { transaction });
                     const itName = itObj?.item_name || `Item #${targetItemId}`;
                     res.status(StatusCodes.BAD_REQUEST);
-                    throw new Error(`Cannot fulfill return for "${itName}": On-hand stock is 0 at the selected location.`);
+                    throw new Error(`Cannot fulfill return for "${itName}": On-hand stock is 0 at ${targetLocationName ? `location "${targetLocationName}"` : "the selected location"}.`);
                 }
 
                 if (fulfilledQty > currentOnHand) {
                     const itObj = await ItemMaster.findByPk(targetItemId, { transaction });
                     const itName = itObj?.item_name || `Item #${targetItemId}`;
                     res.status(StatusCodes.BAD_REQUEST);
-                    throw new Error(`Cannot fulfill ${fulfilledQty} units for "${itName}": Available on-hand stock is only ${currentOnHand} at the selected location.`);
+                    throw new Error(`Cannot fulfill ${fulfilledQty} units for "${itName}": Available on-hand stock is only ${currentOnHand} at ${targetLocationName ? `location "${targetLocationName}"` : "the selected location"}.`);
                 }
 
                 const createdLine = await PurchaseReturnFulfillmentLine.create({

@@ -367,6 +367,24 @@ const PurchaseInvoiceController = {
                 user_id,
             };
 
+            if (headerPayload.poHeaderId) {
+                const po = await PurchaseOrder.findOne({ where: { id: headerPayload.poHeaderId, CompanyId: companyId }, transaction });
+                if (po && po.isActive === false) {
+                    res.status(StatusCodes.BAD_REQUEST);
+                    throw new Error(`Cannot create Bill for Purchase Order ${po.purchaseNo || po.id} because it is deactivated/inactive.`);
+                }
+            }
+            if (headerPayload.grnHeaderId) {
+                const grn = await GRN.findOne({ where: { id: headerPayload.grnHeaderId, CompanyId: companyId }, transaction });
+                if (grn && grn.purchaseOrderId) {
+                    const po = await PurchaseOrder.findOne({ where: { id: grn.purchaseOrderId, CompanyId: companyId }, transaction });
+                    if (po && po.isActive === false) {
+                        res.status(StatusCodes.BAD_REQUEST);
+                        throw new Error(`Cannot create Bill for GRN ${grn.grnNo} because referenced Purchase Order ${po.purchaseNo || po.id} is deactivated/inactive.`);
+                    }
+                }
+            }
+
             const createdHeader =
                 await PurchaseInvoiceHeader.create(
                     headerPayload,
@@ -655,6 +673,26 @@ const PurchaseInvoiceController = {
                 throw new Error("status is required");
             }
 
+            const targetPoId = headerPayload.poHeaderId ?? existingInvoice.poHeaderId;
+            const targetGrnId = headerPayload.grnHeaderId ?? existingInvoice.grnHeaderId;
+            if (targetPoId) {
+                const po = await PurchaseOrder.findOne({ where: { id: targetPoId, CompanyId: companyId }, transaction });
+                if (po && po.isActive === false) {
+                    res.status(StatusCodes.BAD_REQUEST);
+                    throw new Error(`Cannot update Bill for Purchase Order ${po.purchaseNo || po.id} because it is deactivated/inactive.`);
+                }
+            }
+            if (targetGrnId) {
+                const grn = await GRN.findOne({ where: { id: targetGrnId, CompanyId: companyId }, transaction });
+                if (grn && grn.purchaseOrderId) {
+                    const po = await PurchaseOrder.findOne({ where: { id: grn.purchaseOrderId, CompanyId: companyId }, transaction });
+                    if (po && po.isActive === false) {
+                        res.status(StatusCodes.BAD_REQUEST);
+                        throw new Error(`Cannot update Bill for GRN ${grn.grnNo} because referenced Purchase Order ${po.purchaseNo || po.id} is deactivated/inactive.`);
+                    }
+                }
+            }
+
             await existingInvoice.update(headerPayload, { transaction });
             await PurchaseInvoiceLine.destroy({ where: { invoiceHeaderId: existingInvoice.id }, transaction });
 
@@ -879,11 +917,35 @@ const PurchaseInvoiceController = {
         }
         if (!status) {
             res.status(StatusCodes.BAD_REQUEST);
-            throw new Error("status is required");
+            throw new Error("Status is required");
+        }
+
+        const normalizedStatus = normalizePurchaseInvoiceStatus(status);
+
+        if (normalizedStatus !== "CANCELLED") {
+            const targetPoId = invoice.poHeaderId;
+            const targetGrnId = invoice.grnHeaderId;
+            if (targetPoId) {
+                const po = await PurchaseOrder.findOne({ where: { id: targetPoId, CompanyId: companyId } });
+                if (po && po.isActive === false) {
+                    res.status(StatusCodes.BAD_REQUEST);
+                    throw new Error(`Cannot update status for Bill ${invoice.invoiceNumber} because referenced Purchase Order ${po.purchaseNo || po.id} is deactivated/inactive.`);
+                }
+            }
+            if (targetGrnId) {
+                const grn = await GRN.findOne({ where: { id: targetGrnId, CompanyId: companyId } });
+                if (grn && grn.purchaseOrderId) {
+                    const po = await PurchaseOrder.findOne({ where: { id: grn.purchaseOrderId, CompanyId: companyId } });
+                    if (po && po.isActive === false) {
+                        res.status(StatusCodes.BAD_REQUEST);
+                        throw new Error(`Cannot update status for Bill ${invoice.invoiceNumber} because referenced Purchase Order ${po.purchaseNo || po.id} is deactivated/inactive.`);
+                    }
+                }
+            }
         }
 
         const previousStatus = invoice.status;
-        const normalizedStatus = normalizePurchaseInvoiceStatus(status);
+        const normalizedStatusUpdate = normalizePurchaseInvoiceStatus(status);
 
         // Idempotency check: if status unchanged, return early
         if (previousStatus === normalizedStatus) {

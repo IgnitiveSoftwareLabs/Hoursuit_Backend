@@ -131,6 +131,11 @@ const GRNController = {
                     throw new Error(`Referenced Purchase Order #${headerPayload.purchaseOrderId} does not exist`);
                 }
 
+                if (po.isActive === false) {
+                    res.status(StatusCodes.BAD_REQUEST);
+                    throw new Error(`Cannot create GRN for Purchase Order ${po.purchaseNo || po.id} because it is deactivated/inactive.`);
+                }
+
                 const poStatus = String(po.status || "").toUpperCase();
                 if (poStatus === "DRAFT") {
                     res.status(StatusCodes.BAD_REQUEST);
@@ -252,10 +257,11 @@ const GRNController = {
                     }
                 }
 
+                const lineLocationId = normalizeOptionalId(lineItem.locationId || lineItem.location_id) || normalizeOptionalId(headerPayload.city_id || header.location_id || header.locationId);
                 const linePayload: any = {
                     purchaseOrderLineId: poLineId,
                     itemId,
-                    locationId: normalizeOptionalId(lineItem.locationId || lineItem.location_id),
+                    locationId: lineLocationId,
                     onHand: lineItem.onHand !== undefined && lineItem.onHand !== "" ? Number(lineItem.onHand) : 0,
                     orderedQty,
                     receivedQty,
@@ -552,6 +558,11 @@ const GRNController = {
                     throw new Error(`Referenced Purchase Order #${targetPoId} does not exist`);
                 }
 
+                if (po.isActive === false) {
+                    res.status(StatusCodes.BAD_REQUEST);
+                    throw new Error(`Cannot update GRN for Purchase Order ${po.purchaseNo || po.id} because it is deactivated/inactive.`);
+                }
+
                 const poStatus = String(po.status || "").toUpperCase();
                 if (poStatus === "CANCELLED") {
                     res.status(StatusCodes.BAD_REQUEST);
@@ -672,11 +683,12 @@ const GRNController = {
                     }
                 }
 
+                const lineLocationId = normalizeOptionalId(lineItem.locationId || lineItem.location_id) || normalizeOptionalId(headerPayload.city_id || header.location_id || header.locationId);
                 const linePayload: any = {
                     grnHeaderId: existingGRN.id,
                     purchaseOrderLineId: poLineId,
                     itemId,
-                    locationId: normalizeOptionalId(lineItem.locationId || lineItem.location_id),
+                    locationId: lineLocationId,
                     onHand: lineItem.onHand !== undefined && lineItem.onHand !== "" ? Number(lineItem.onHand) : 0,
                     orderedQty,
                     receivedQty,
@@ -745,6 +757,14 @@ const GRNController = {
 
         const previousStatus = grn.status;
         const normalizedStatus = normalizeGRNStatus(status);
+
+        if (grn.purchaseOrderId && normalizedStatus !== "CANCELLED") {
+            const po = await PurchaseOrder.findOne({ where: { id: grn.purchaseOrderId, CompanyId } });
+            if (po && po.isActive === false) {
+                res.status(StatusCodes.BAD_REQUEST);
+                throw new Error(`Cannot update status for GRN ${grn.grnNo} because referenced Purchase Order ${po.purchaseNo || po.id} is deactivated/inactive.`);
+            }
+        }
 
         // Idempotency check: if status is unchanged, return current GRN
         if (previousStatus === normalizedStatus) {

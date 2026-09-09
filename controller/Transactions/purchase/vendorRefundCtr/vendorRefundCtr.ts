@@ -9,6 +9,10 @@ import { findCompanyForUser } from "../../../../utils/findCompanyForUser";
 import VendorRefundHeader from "../../../../modals/Transactions/purchase/vendorRefund/vendorRefundHeader";
 import VendorCreditHeader from "../../../../modals/Transactions/purchase/vendorCredit/vendorCreditHeader";
 import VendorCreditBillApply from "../../../../modals/Transactions/purchase/vendorCredit/vendorCreditBillApply";
+import { PurchaseOrder } from "../../../../modals/Transactions/purchase/purchaseOrder";
+import { GRN } from "../../../../modals/Transactions/purchase/GRN";
+import { PurchaseInvoiceHeader } from "../../../../modals/Transactions/purchase/purchaseInvoice";
+import { PurchaseReturnHeader } from "../../../../modals/Transactions/purchase/purchaseReturn";
 import VendorDetails from "../../../../modals/masters/vendorDetails/vendorDetails";
 import ChartOfAccountMaster from "../../../../modals/masters/chartOfAccount/chartOfAccount";
 import { GLImpactService } from "../../../../utils/glImpactService";
@@ -58,6 +62,51 @@ export const VendorRefundController = {
             if (!vendorCredit) {
                 res.status(StatusCodes.NOT_FOUND);
                 throw new Error(`Vendor Credit #${vendorCreditId} not found`);
+            }
+
+            if (vendorCredit.purchaseReturnHeaderId) {
+                const ret = await PurchaseReturnHeader.findOne({ where: { id: vendorCredit.purchaseReturnHeaderId, companyId }, transaction });
+                if (ret) {
+                    if (ret.purchaseOrderHeaderId) {
+                        const po = await PurchaseOrder.findOne({ where: { id: ret.purchaseOrderHeaderId, CompanyId: companyId }, transaction });
+                        if (po && po.isActive === false) {
+                            res.status(StatusCodes.BAD_REQUEST);
+                            throw new Error(`Cannot create Vendor Refund for Vendor Credit #${vendorCredit.creditNoteNumber || vendorCredit.id} because referenced Purchase Order ${po.purchaseNo || po.id} is deactivated/inactive.`);
+                        }
+                    }
+                    if (ret.grnHeaderId) {
+                        const grn = await GRN.findOne({ where: { id: ret.grnHeaderId, CompanyId: companyId }, transaction });
+                        if (grn && grn.purchaseOrderId) {
+                            const po = await PurchaseOrder.findOne({ where: { id: grn.purchaseOrderId, CompanyId: companyId }, transaction });
+                            if (po && po.isActive === false) {
+                                res.status(StatusCodes.BAD_REQUEST);
+                                throw new Error(`Cannot create Vendor Refund for Vendor Credit #${vendorCredit.creditNoteNumber || vendorCredit.id} because referenced Purchase Order ${po.purchaseNo || po.id} is deactivated/inactive.`);
+                            }
+                        }
+                    }
+                }
+            }
+            if (vendorCredit.purchaseInvoiceHeaderId) {
+                const inv = await PurchaseInvoiceHeader.findOne({ where: { id: vendorCredit.purchaseInvoiceHeaderId, companyId }, transaction });
+                if (inv) {
+                    if (inv.poHeaderId) {
+                        const po = await PurchaseOrder.findOne({ where: { id: inv.poHeaderId, CompanyId: companyId }, transaction });
+                        if (po && po.isActive === false) {
+                            res.status(StatusCodes.BAD_REQUEST);
+                            throw new Error(`Cannot create Vendor Refund for Vendor Credit #${vendorCredit.creditNoteNumber || vendorCredit.id} because referenced Purchase Order ${po.purchaseNo || po.id} is deactivated/inactive.`);
+                        }
+                    }
+                    if (inv.grnHeaderId) {
+                        const grn = await GRN.findOne({ where: { id: inv.grnHeaderId, CompanyId: companyId }, transaction });
+                        if (grn && grn.purchaseOrderId) {
+                            const po = await PurchaseOrder.findOne({ where: { id: grn.purchaseOrderId, CompanyId: companyId }, transaction });
+                            if (po && po.isActive === false) {
+                                res.status(StatusCodes.BAD_REQUEST);
+                                throw new Error(`Cannot create Vendor Refund for Vendor Credit #${vendorCredit.creditNoteNumber || vendorCredit.id} because referenced Purchase Order ${po.purchaseNo || po.id} is deactivated/inactive.`);
+                            }
+                        }
+                    }
+                }
             }
 
             const totalCreditAmount = Number(vendorCredit.totalAmount || 0);

@@ -190,6 +190,7 @@ const PurchaseOrderController = {
                 class_id: normalizeOptionalId(header.class_id),
                 department_id: normalizeOptionalId(header.department_id),
                 status: normalizePurchaseOrderStatus(header.status, "DRAFT"),
+                isActive: header.isActive !== undefined ? Boolean(header.isActive) : true,
                 remarks: header.remarks || null,
                 CompanyId,
                 user_id,
@@ -242,11 +243,11 @@ const PurchaseOrderController = {
                 const taxableAmount = grossAmount - discountAmount;
                 const subtotal = lineItem.subtotal !== undefined && lineItem.subtotal !== ""
                     ? Number(lineItem.subtotal)
-                    : Number(taxableAmount.toFixed(2));
+                    : Number(grossAmount.toFixed(2));
                 const amount =
                     lineItem.amount !== undefined && lineItem.amount !== ""
                         ? Number(lineItem.amount)
-                        : taxableAmount;
+                        : grossAmount;
                 const taxAmount = Number(((taxableAmount * taxRate) / 100).toFixed(2));
                 const lineTotal =
                     lineItem.line_total !== undefined && lineItem.line_total !== ""
@@ -355,6 +356,9 @@ const PurchaseOrderController = {
         const whereClause: any = {
             CompanyId,
         };
+        if (req.query.isActive !== undefined && req.query.isActive !== "") {
+            whereClause.isActive = String(req.query.isActive).toLowerCase() === "true";
+        }
         if (search) {
             whereClause[Op.or] = [
                 { purchaseNo: { [Op.like]: `%${search}%` } },
@@ -774,6 +778,7 @@ const PurchaseOrderController = {
                 class_id: normalizeOptionalId(header.class_id),
                 department_id: normalizeOptionalId(header.department_id),
                 status: normalizePurchaseOrderStatus(header.status || existingPurchaseOrder.status, existingPurchaseOrder.status || "DRAFT"),
+                isActive: header.isActive !== undefined ? Boolean(header.isActive) : existingPurchaseOrder.isActive,
                 remarks: header.remarks || null,
                 CompanyId,
                 user_id,
@@ -834,11 +839,11 @@ const PurchaseOrderController = {
                 const taxableAmount = grossAmount - discountAmount;
                 const subtotal = lineItem.subtotal !== undefined && lineItem.subtotal !== ""
                     ? Number(lineItem.subtotal)
-                    : Number(taxableAmount.toFixed(2));
+                    : Number(grossAmount.toFixed(2));
                 const amount =
                     lineItem.amount !== undefined && lineItem.amount !== ""
                         ? Number(lineItem.amount)
-                        : taxableAmount;
+                        : grossAmount;
                 const taxAmount = Number(((taxableAmount * taxRate) / 100).toFixed(2));
                 const lineTotal =
                     lineItem.line_total !== undefined && lineItem.line_total !== ""
@@ -920,10 +925,10 @@ const PurchaseOrderController = {
         }
     }),
 
-    // Update only the status of a purchase order
+    // Update only the status or active state of a purchase order
     updateStatusOfPurchaseOrder: asyncHandler(async (req: CustomRequest, res: Response) => {
         const { id } = req.params;
-        const { status } = req.body;
+        const { status, isActive } = req.body;
 
         const company = await findCompanyForUser(req.user);
         const CompanyId = company?.id;
@@ -943,18 +948,98 @@ const PurchaseOrderController = {
             throw new Error("Purchase order not found");
         }
 
-        if (!status) {
-            res.status(StatusCodes.BAD_REQUEST);
-            throw new Error("Status is required");
+        const updatePayload: any = {};
+        if (status) {
+            updatePayload.status = normalizePurchaseOrderStatus(status);
+        }
+        if (isActive !== undefined) {
+            updatePayload.isActive = Boolean(isActive);
         }
 
-        const normalizedStatus = normalizePurchaseOrderStatus(status);
-        await purchaseOrder.update({ status: normalizedStatus });
+        if (Object.keys(updatePayload).length === 0) {
+            res.status(StatusCodes.BAD_REQUEST);
+            throw new Error("Status or isActive is required");
+        }
+
+        await purchaseOrder.update(updatePayload);
 
         res.status(StatusCodes.OK).json({
             success: true,
-            message: "Purchase order status updated successfully",
+            message: "Purchase order updated successfully",
             result: purchaseOrder,
+        });
+    }),
+
+    // Toggle active/inactive status of a purchase order
+    toggleActivePurchaseOrder: asyncHandler(async (req: CustomRequest, res: Response) => {
+        const { id } = req.params;
+        const { isActive } = req.body;
+
+        const company = await findCompanyForUser(req.user);
+        const CompanyId = company?.id;
+        const user_id = req.user?.id;
+
+        if (!CompanyId || !user_id) {
+            res.status(StatusCodes.UNAUTHORIZED);
+            throw new Error("User authentication required");
+        }
+
+        const purchaseOrder = await PurchaseOrder.findOne({
+            where: { id: Number(id), CompanyId },
+        });
+
+        if (!purchaseOrder) {
+            res.status(StatusCodes.NOT_FOUND);
+            throw new Error("Purchase order not found");
+        }
+
+        const nextActiveState = isActive !== undefined ? Boolean(isActive) : !purchaseOrder.isActive;
+        await purchaseOrder.update({ isActive: nextActiveState });
+
+        res.status(StatusCodes.OK).json({
+            success: true,
+            message: `Purchase order ${nextActiveState ? "activated" : "deactivated"} successfully`,
+            result: purchaseOrder,
+        });
+    }),
+
+    // Bulk toggle active/inactive status of purchase orders
+    bulkToggleActivePurchaseOrder: asyncHandler(async (req: CustomRequest, res: Response) => {
+        const { ids, isActive } = req.body;
+
+        if (!Array.isArray(ids) || ids.length === 0) {
+            res.status(StatusCodes.BAD_REQUEST);
+            throw new Error("An array of purchase order IDs is required");
+        }
+
+        if (typeof isActive !== "boolean") {
+            res.status(StatusCodes.BAD_REQUEST);
+            throw new Error("isActive (boolean) is required");
+        }
+
+        const company = await findCompanyForUser(req.user);
+        const CompanyId = company?.id;
+        const user_id = req.user?.id;
+
+        if (!CompanyId || !user_id) {
+            res.status(StatusCodes.UNAUTHORIZED);
+            throw new Error("User authentication required");
+        }
+
+        const [affectedCount] = await PurchaseOrder.update(
+            { isActive },
+            {
+                where: {
+                    id: { [Op.in]: ids.map(Number) },
+                    CompanyId,
+                },
+            }
+        );
+
+        res.status(StatusCodes.OK).json({
+            success: true,
+            message: `${affectedCount} Purchase Order(s) ${isActive ? "activated" : "deactivated"} successfully`,
+            affectedCount,
         });
     }),
 

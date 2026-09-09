@@ -120,6 +120,46 @@ const PurchaseReturnController = {
                 throw new Error("Valid returnDate is required");
             }
 
+            if (headerPayload.purchaseOrderHeaderId) {
+                const po = await PurchaseOrder.findOne({ where: { id: headerPayload.purchaseOrderHeaderId, CompanyId: companyId }, transaction });
+                if (po && po.isActive === false) {
+                    res.status(StatusCodes.BAD_REQUEST);
+                    throw new Error(`Cannot create Purchase Return for Purchase Order ${po.purchaseNo || po.id} because it is deactivated/inactive.`);
+                }
+            }
+            if (headerPayload.grnHeaderId) {
+                const grn = await GRN.findOne({ where: { id: headerPayload.grnHeaderId, CompanyId: companyId }, transaction });
+                if (grn && grn.purchaseOrderId) {
+                    const po = await PurchaseOrder.findOne({ where: { id: grn.purchaseOrderId, CompanyId: companyId }, transaction });
+                    if (po && po.isActive === false) {
+                        res.status(StatusCodes.BAD_REQUEST);
+                        throw new Error(`Cannot create Purchase Return for GRN ${grn.grnNo} because referenced Purchase Order ${po.purchaseNo || po.id} is deactivated/inactive.`);
+                    }
+                }
+            }
+            if (headerPayload.purchaseInvoiceHeaderId) {
+                const inv = await PurchaseInvoiceHeader.findOne({ where: { id: headerPayload.purchaseInvoiceHeaderId, companyId }, transaction });
+                if (inv) {
+                    if (inv.poHeaderId) {
+                        const po = await PurchaseOrder.findOne({ where: { id: inv.poHeaderId, CompanyId: companyId }, transaction });
+                        if (po && po.isActive === false) {
+                            res.status(StatusCodes.BAD_REQUEST);
+                            throw new Error(`Cannot create Purchase Return for Bill ${inv.invoiceNumber} because referenced Purchase Order ${po.purchaseNo || po.id} is deactivated/inactive.`);
+                        }
+                    }
+                    if (inv.grnHeaderId) {
+                        const grn = await GRN.findOne({ where: { id: inv.grnHeaderId, CompanyId: companyId }, transaction });
+                        if (grn && grn.purchaseOrderId) {
+                            const po = await PurchaseOrder.findOne({ where: { id: grn.purchaseOrderId, CompanyId: companyId }, transaction });
+                            if (po && po.isActive === false) {
+                                res.status(StatusCodes.BAD_REQUEST);
+                                throw new Error(`Cannot create Purchase Return for Bill ${inv.invoiceNumber} because referenced Purchase Order ${po.purchaseNo || po.id} is deactivated/inactive.`);
+                            }
+                        }
+                    }
+                }
+            }
+
             let totalSubtotal = 0;
             let totalDiscount = 0;
             let totalTax = 0;
@@ -456,6 +496,50 @@ const PurchaseReturnController = {
                 throw new Error("Valid returnDate is required");
             }
 
+            const targetPoId = headerPayload.purchaseOrderHeaderId ?? existingReturn.purchaseOrderHeaderId;
+            const targetGrnId = headerPayload.grnHeaderId ?? existingReturn.grnHeaderId;
+            const targetInvId = headerPayload.purchaseInvoiceHeaderId ?? existingReturn.purchaseInvoiceHeaderId;
+
+            if (targetPoId) {
+                const po = await PurchaseOrder.findOne({ where: { id: targetPoId, CompanyId: companyId }, transaction });
+                if (po && po.isActive === false) {
+                    res.status(StatusCodes.BAD_REQUEST);
+                    throw new Error(`Cannot update Purchase Return for Purchase Order ${po.purchaseNo || po.id} because it is deactivated/inactive.`);
+                }
+            }
+            if (targetGrnId) {
+                const grn = await GRN.findOne({ where: { id: targetGrnId, CompanyId: companyId }, transaction });
+                if (grn && grn.purchaseOrderId) {
+                    const po = await PurchaseOrder.findOne({ where: { id: grn.purchaseOrderId, CompanyId: companyId }, transaction });
+                    if (po && po.isActive === false) {
+                        res.status(StatusCodes.BAD_REQUEST);
+                        throw new Error(`Cannot update Purchase Return for GRN ${grn.grnNo} because referenced Purchase Order ${po.purchaseNo || po.id} is deactivated/inactive.`);
+                    }
+                }
+            }
+            if (targetInvId) {
+                const inv = await PurchaseInvoiceHeader.findOne({ where: { id: targetInvId, companyId }, transaction });
+                if (inv) {
+                    if (inv.poHeaderId) {
+                        const po = await PurchaseOrder.findOne({ where: { id: inv.poHeaderId, CompanyId: companyId }, transaction });
+                        if (po && po.isActive === false) {
+                            res.status(StatusCodes.BAD_REQUEST);
+                            throw new Error(`Cannot update Purchase Return for Bill ${inv.invoiceNumber} because referenced Purchase Order ${po.purchaseNo || po.id} is deactivated/inactive.`);
+                        }
+                    }
+                    if (inv.grnHeaderId) {
+                        const grn = await GRN.findOne({ where: { id: inv.grnHeaderId, CompanyId: companyId }, transaction });
+                        if (grn && grn.purchaseOrderId) {
+                            const po = await PurchaseOrder.findOne({ where: { id: grn.purchaseOrderId, CompanyId: companyId }, transaction });
+                            if (po && po.isActive === false) {
+                                res.status(StatusCodes.BAD_REQUEST);
+                                throw new Error(`Cannot update Purchase Return for Bill ${inv.invoiceNumber} because referenced Purchase Order ${po.purchaseNo || po.id} is deactivated/inactive.`);
+                            }
+                        }
+                    }
+                }
+            }
+
             let totalSubtotal = 0;
             let totalDiscount = 0;
             let totalTax = 0;
@@ -609,6 +693,52 @@ const PurchaseReturnController = {
 
         const previousStatus = purchaseReturn.status;
         const normalizedStatus = normalizePurchaseReturnStatus(status);
+
+        if (normalizedStatus !== "CANCELLED") {
+            const targetPoId = purchaseReturn.purchaseOrderHeaderId;
+            const targetGrnId = purchaseReturn.grnHeaderId;
+            const targetInvId = purchaseReturn.purchaseInvoiceHeaderId;
+
+            if (targetPoId) {
+                const po = await PurchaseOrder.findOne({ where: { id: targetPoId, CompanyId: companyId } });
+                if (po && po.isActive === false) {
+                    res.status(StatusCodes.BAD_REQUEST);
+                    throw new Error(`Cannot update status for Purchase Return ${purchaseReturn.returnNumber} because referenced Purchase Order ${po.purchaseNo || po.id} is deactivated/inactive.`);
+                }
+            }
+            if (targetGrnId) {
+                const grn = await GRN.findOne({ where: { id: targetGrnId, CompanyId: companyId } });
+                if (grn && grn.purchaseOrderId) {
+                    const po = await PurchaseOrder.findOne({ where: { id: grn.purchaseOrderId, CompanyId: companyId } });
+                    if (po && po.isActive === false) {
+                        res.status(StatusCodes.BAD_REQUEST);
+                        throw new Error(`Cannot update status for Purchase Return ${purchaseReturn.returnNumber} because referenced Purchase Order ${po.purchaseNo || po.id} is deactivated/inactive.`);
+                    }
+                }
+            }
+            if (targetInvId) {
+                const inv = await PurchaseInvoiceHeader.findOne({ where: { id: targetInvId, companyId } });
+                if (inv) {
+                    if (inv.poHeaderId) {
+                        const po = await PurchaseOrder.findOne({ where: { id: inv.poHeaderId, CompanyId: companyId } });
+                        if (po && po.isActive === false) {
+                            res.status(StatusCodes.BAD_REQUEST);
+                            throw new Error(`Cannot update status for Purchase Return ${purchaseReturn.returnNumber} because referenced Purchase Order ${po.purchaseNo || po.id} is deactivated/inactive.`);
+                        }
+                    }
+                    if (inv.grnHeaderId) {
+                        const grn = await GRN.findOne({ where: { id: inv.grnHeaderId, CompanyId: companyId } });
+                        if (grn && grn.purchaseOrderId) {
+                            const po = await PurchaseOrder.findOne({ where: { id: grn.purchaseOrderId, CompanyId: companyId } });
+                            if (po && po.isActive === false) {
+                                res.status(StatusCodes.BAD_REQUEST);
+                                throw new Error(`Cannot update status for Purchase Return ${purchaseReturn.returnNumber} because referenced Purchase Order ${po.purchaseNo || po.id} is deactivated/inactive.`);
+                            }
+                        }
+                    }
+                }
+            }
+        }
 
         if (previousStatus === normalizedStatus) {
             res.status(StatusCodes.OK).json({

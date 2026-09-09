@@ -14,6 +14,8 @@ import VendorCreditLine from "../../../../modals/Transactions/purchase/vendorCre
 import { PurchaseReturnHeader, PurchaseReturnLine } from "../../../../modals/Transactions/purchase/purchaseReturn";
 import PurchaseReturnFulfillmentLine from "../../../../modals/Transactions/purchase/purchaseReturn/purchaseReturnFulfillmentLine";
 import PurchaseReturnFulfillmentHeader from "../../../../modals/Transactions/purchase/purchaseReturn/purchaseReturnFulfillmentHeader";
+import { PurchaseOrder } from "../../../../modals/Transactions/purchase/purchaseOrder";
+import { GRN } from "../../../../modals/Transactions/purchase/GRN";
 import ItemMaster from "../../../../modals/masters/items/itemMaster";
 import CityMaster from "../../../../modals/masters/city/city";
 import VendorDetails from "../../../../modals/masters/vendorDetails/vendorDetails";
@@ -193,6 +195,53 @@ export const VendorCreditController = {
             const finalDiscount = totalDiscount > 0 ? totalDiscount : Number(header.discountAmount || header.discount_amount || 0);
             const finalTax = totalTax > 0 ? totalTax : Number(header.taxAmount || header.tax_amount || 0);
             const finalTotal = totalHeaderAmount > 0 ? totalHeaderAmount : Number(header.totalAmount || header.total_amount || header.amount || (finalSubtotal - finalDiscount + finalTax) || 0);
+            const targetReturnId = header.purchaseReturnHeaderId ? Number(header.purchaseReturnHeaderId) : null;
+            const targetInvoiceId = header.purchaseInvoiceHeaderId ? Number(header.purchaseInvoiceHeaderId) : null;
+
+            if (targetReturnId) {
+                const ret = await PurchaseReturnHeader.findOne({ where: { id: targetReturnId, companyId }, transaction });
+                if (ret) {
+                    if (ret.purchaseOrderHeaderId) {
+                        const po = await PurchaseOrder.findOne({ where: { id: ret.purchaseOrderHeaderId, CompanyId: companyId }, transaction });
+                        if (po && po.isActive === false) {
+                            res.status(StatusCodes.BAD_REQUEST);
+                            throw new Error(`Cannot create Vendor Credit for Purchase Return #${ret.returnNumber || ret.id} because referenced Purchase Order ${po.purchaseNo || po.id} is deactivated/inactive.`);
+                        }
+                    }
+                    if (ret.grnHeaderId) {
+                        const grn = await GRN.findOne({ where: { id: ret.grnHeaderId, CompanyId: companyId }, transaction });
+                        if (grn && grn.purchaseOrderId) {
+                            const po = await PurchaseOrder.findOne({ where: { id: grn.purchaseOrderId, CompanyId: companyId }, transaction });
+                            if (po && po.isActive === false) {
+                                res.status(StatusCodes.BAD_REQUEST);
+                                throw new Error(`Cannot create Vendor Credit for Purchase Return #${ret.returnNumber || ret.id} because referenced Purchase Order ${po.purchaseNo || po.id} is deactivated/inactive.`);
+                            }
+                        }
+                    }
+                }
+            }
+            if (targetInvoiceId) {
+                const inv = await PurchaseInvoiceHeader.findOne({ where: { id: targetInvoiceId, companyId }, transaction });
+                if (inv) {
+                    if (inv.poHeaderId) {
+                        const po = await PurchaseOrder.findOne({ where: { id: inv.poHeaderId, CompanyId: companyId }, transaction });
+                        if (po && po.isActive === false) {
+                            res.status(StatusCodes.BAD_REQUEST);
+                            throw new Error(`Cannot create Vendor Credit for Bill ${inv.invoiceNumber} because referenced Purchase Order ${po.purchaseNo || po.id} is deactivated/inactive.`);
+                        }
+                    }
+                    if (inv.grnHeaderId) {
+                        const grn = await GRN.findOne({ where: { id: inv.grnHeaderId, CompanyId: companyId }, transaction });
+                        if (grn && grn.purchaseOrderId) {
+                            const po = await PurchaseOrder.findOne({ where: { id: grn.purchaseOrderId, CompanyId: companyId }, transaction });
+                            if (po && po.isActive === false) {
+                                res.status(StatusCodes.BAD_REQUEST);
+                                throw new Error(`Cannot create Vendor Credit for Bill ${inv.invoiceNumber} because referenced Purchase Order ${po.purchaseNo || po.id} is deactivated/inactive.`);
+                            }
+                        }
+                    }
+                }
+            }
 
             const vendorCreditHeader = await VendorCreditHeader.create({
                 companyId,

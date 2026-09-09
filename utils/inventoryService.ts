@@ -7,6 +7,7 @@ import PurchaseReturnFulfillmentHeader from "../modals/Transactions/purchase/pur
 import PurchaseReturnFulfillmentLine from "../modals/Transactions/purchase/purchaseReturn/purchaseReturnFulfillmentLine";
 import ItemMaster from "../modals/masters/items/itemMaster";
 import UOMMaster from "../modals/masters/UOM/UOMMaster";
+import CityMaster from "../modals/masters/city/city";
 import InventoryCount from "../modals/inventory/inventory";
 import { normalizePurchaseOrderStatus } from "./p2pStatus";
 
@@ -72,6 +73,17 @@ export const InventoryService = {
         throw new Error(`Missing item_id for GRN Line ID: ${itemLine.id}`);
       }
 
+      const rawLocationId = itemLine.locationId || itemLine.location_id || (grn as any).locationId || (grn as any).location_id || (grn as any).city_id;
+      let locationName: string | undefined = undefined;
+      if (rawLocationId) {
+        const city = await CityMaster.findByPk(rawLocationId, { transaction });
+        if (city) {
+          locationName = city.city_name || (city as any).name;
+        } else {
+          locationName = String(rawLocationId);
+        }
+      }
+
       // Execute inventory addition via InventoryCount model static method
       await InventoryCount.updateInventory(
         {
@@ -80,7 +92,8 @@ export const InventoryService = {
           uom_id: uomId,
           rate: effectiveRate,
           amount,
-          warehouseId: warehouseId || (grn as any).warehouseId || itemLine.locationId || itemLine.warehouseId || 1,
+          location: locationName,
+          warehouseId: warehouseId || (grn as any).warehouseId || 1,
           godownId: itemLine.godownId || (grn as any).godownId || null,
           stack: itemLine.stack || (grn as any).stackId || null,
           customer_id: null,
@@ -275,6 +288,17 @@ export const InventoryService = {
       const itemId = itemLine.itemId || itemLine.item_id || itemLine.item?.id;
       const uomId = itemLine.uom_id || itemLine.item?.uom_id || 1;
 
+      const rawLocationId = itemLine.locationId || itemLine.location_id || (grn as any).locationId || (grn as any).location_id || (grn as any).city_id;
+      let locationName: string | undefined = undefined;
+      if (rawLocationId) {
+        const city = await CityMaster.findByPk(rawLocationId, { transaction });
+        if (city) {
+          locationName = city.city_name || (city as any).name;
+        } else {
+          locationName = String(rawLocationId);
+        }
+      }
+
       await InventoryCount.updateInventory(
         {
           item_id: itemId,
@@ -282,7 +306,8 @@ export const InventoryService = {
           uom_id: uomId,
           rate,
           amount: qty * rate,
-          warehouseId: warehouseId || (grn as any).warehouseId || itemLine.locationId || itemLine.warehouseId || 1,
+          location: locationName,
+          warehouseId: warehouseId || (grn as any).warehouseId || 1,
           godownId: itemLine.godownId || (grn as any).godownId || null,
           stack: itemLine.stack || (grn as any).stackId || null,
           customer_id: null,
@@ -347,6 +372,17 @@ export const InventoryService = {
       const itemId = line.itemId;
       const uomId = line.item?.uom_id || 1;
 
+      const rawLocId = line.warehouseId || (fulfillment as any).location_id;
+      let locationName: string | undefined = undefined;
+      if (rawLocId) {
+        const city = await CityMaster.findByPk(rawLocId, { transaction });
+        if (city) {
+          locationName = city.city_name || (city as any).name;
+        } else {
+          locationName = String(rawLocId);
+        }
+      }
+
       await InventoryCount.updateInventory(
         {
           item_id: itemId,
@@ -354,7 +390,8 @@ export const InventoryService = {
           uom_id: uomId,
           rate,
           amount: qty * rate,
-          warehouseId: line.warehouseId || undefined,
+          location: locationName,
+          warehouseId: 1,
           godownId: null,
           stack: null,
           customer_id: null,

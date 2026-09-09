@@ -119,6 +119,20 @@ class InventoryCount extends Model<InventoryCountAttributes, InventoryCountCreat
             operation
         } = data;
 
+        let resolvedWarehouseId: number = 1;
+        if (warehouseId && Number(warehouseId) > 0) {
+            const wh = await Warehouse.findByPk(Number(warehouseId), transaction ? { transaction } : {});
+            if (wh) {
+                resolvedWarehouseId = Number(warehouseId);
+            } else {
+                const defaultWh = await Warehouse.findOne({ where: { CompanyId }, ...(transaction ? { transaction } : {}) });
+                resolvedWarehouseId = defaultWh ? defaultWh.id : 1;
+            }
+        } else {
+            const defaultWh = await Warehouse.findOne({ where: { CompanyId }, ...(transaction ? { transaction } : {}) });
+            resolvedWarehouseId = defaultWh ? defaultWh.id : 1;
+        }
+
         // Build the where clause, handling null values properly
         const whereClause: any = {
             item_id,
@@ -126,6 +140,10 @@ class InventoryCount extends Model<InventoryCountAttributes, InventoryCountCreat
             CompanyId,
             isActive: true
         };
+
+        if (location !== undefined && location !== null && String(location).trim() !== "") {
+            whereClause.location = String(location).trim();
+        }
 
         if (customer_id !== undefined) {
             whereClause.customer_id = customer_id;
@@ -144,12 +162,6 @@ class InventoryCount extends Model<InventoryCountAttributes, InventoryCountCreat
             whereClause.lot_number = lot_number;
         } else {
             whereClause.lot_number = null;
-        }
-
-        if (warehouseId !== null && warehouseId !== undefined) {
-            whereClause.warehouseId = warehouseId;
-        } else {
-            whereClause.warehouseId = null;
         }
 
         if (godownId !== null && godownId !== undefined) {
@@ -171,12 +183,8 @@ class InventoryCount extends Model<InventoryCountAttributes, InventoryCountCreat
             whereClause.work_category_id = null;
         }
 
-        // Handle optional material_status_id
-
-
         // Include rate in matching criteria: inventory entries with different rates should be separate rows
         if (rate !== null && rate !== undefined) {
-            // Normalize to number for comparison since DB stores decimal
             whereClause.rate = Number(rate);
         } else {
             whereClause.rate = null;
@@ -195,10 +203,10 @@ class InventoryCount extends Model<InventoryCountAttributes, InventoryCountCreat
             if (!targetInventory || Number(targetInventory.qty) < Number(qty)) {
                 let candidates: InventoryCount[] = [];
 
-                // Candidate search 1: Same item, company, and warehouse (if provided)
+                // Candidate search 1: Same item, company, and location (if provided)
                 const searchWhere: any = { item_id, CompanyId, isActive: true };
-                if (warehouseId !== null && warehouseId !== undefined) {
-                    searchWhere.warehouseId = warehouseId;
+                if (location !== undefined && location !== null && String(location).trim() !== "") {
+                    searchWhere.location = String(location).trim();
                 }
                 candidates = await InventoryCount.findAll({
                     where: searchWhere,
@@ -206,7 +214,7 @@ class InventoryCount extends Model<InventoryCountAttributes, InventoryCountCreat
                     ...(transaction ? { transaction } : {})
                 });
 
-                // Candidate search 2: Same item and company across any warehouse
+                // Candidate search 2: Same item and company across any location/warehouse
                 if (candidates.length === 0) {
                     candidates = await InventoryCount.findAll({
                         where: { item_id, CompanyId, isActive: true },
@@ -272,7 +280,7 @@ class InventoryCount extends Model<InventoryCountAttributes, InventoryCountCreat
                     amount: newAmount,
                     inventory_age: daysDifference,
                     location: location || targetInventory.location,
-                    warehouseId: warehouseId !== undefined && warehouseId !== null ? warehouseId : targetInventory.warehouseId,
+                    warehouseId: resolvedWarehouseId,
                     godownId: godownId !== undefined && godownId !== null ? godownId : targetInventory.godownId,
                     stack: stack !== undefined && stack !== null ? stack : targetInventory.stack,
                     work_category_id: work_category_id !== undefined && work_category_id !== null ? work_category_id : targetInventory.work_category_id,
@@ -282,12 +290,12 @@ class InventoryCount extends Model<InventoryCountAttributes, InventoryCountCreat
             }
         } else {
             // ADD operation:
-            // Check if item is already present in inventory for this company/warehouse
+            // Check if item is already present in inventory for this company/location
             let targetInventory = existingInventory;
             if (!targetInventory) {
                 const searchWhere: any = { item_id, CompanyId, isActive: true };
-                if (warehouseId !== null && warehouseId !== undefined) {
-                    searchWhere.warehouseId = warehouseId;
+                if (location !== undefined && location !== null && String(location).trim() !== "") {
+                    searchWhere.location = String(location).trim();
                 }
                 targetInventory = await InventoryCount.findOne({
                     where: searchWhere,
@@ -325,7 +333,7 @@ class InventoryCount extends Model<InventoryCountAttributes, InventoryCountCreat
                     inventory_age: daysDifference,
                     uom_id: uom_id || targetInventory.uom_id,
                     location: location || targetInventory.location,
-                    warehouseId: (warehouseId !== undefined && warehouseId !== null) ? warehouseId : targetInventory.warehouseId,
+                    warehouseId: resolvedWarehouseId,
                     godownId: (godownId !== undefined && godownId !== null) ? godownId : targetInventory.godownId,
                     stack: (stack !== undefined && stack !== null) ? stack : targetInventory.stack,
                     work_category_id: (work_category_id !== undefined && work_category_id !== null) ? work_category_id : targetInventory.work_category_id,
@@ -348,7 +356,7 @@ class InventoryCount extends Model<InventoryCountAttributes, InventoryCountCreat
                     amount: newAmount,
                     inventory_age: inventoryAge,
                     location: location || undefined,
-                    warehouseId: (warehouseId || 1) as any,
+                    warehouseId: resolvedWarehouseId,
                     godownId: godownId as any,
                     stack: stack as any,
                     work_category_id: work_category_id !== undefined && work_category_id !== null ? work_category_id : undefined,

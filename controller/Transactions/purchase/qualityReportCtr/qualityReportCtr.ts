@@ -73,6 +73,24 @@ const QualityReportController = {
                 throw new Error("Valid inspectionDate is required");
             }
 
+            if (headerPayload.poHeaderId) {
+                const po = await PurchaseOrder.findOne({ where: { id: headerPayload.poHeaderId, CompanyId: companyId }, transaction });
+                if (po && po.isActive === false) {
+                    res.status(StatusCodes.BAD_REQUEST);
+                    throw new Error(`Cannot create Quality Inspection for Purchase Order ${po.purchaseNo || po.id} because it is deactivated/inactive.`);
+                }
+            }
+            if (headerPayload.grnHeaderId) {
+                const grn = await GRN.findOne({ where: { id: headerPayload.grnHeaderId, CompanyId: companyId }, transaction });
+                if (grn && grn.purchaseOrderId) {
+                    const po = await PurchaseOrder.findOne({ where: { id: grn.purchaseOrderId, CompanyId: companyId }, transaction });
+                    if (po && po.isActive === false) {
+                        res.status(StatusCodes.BAD_REQUEST);
+                        throw new Error(`Cannot create Quality Inspection for GRN ${grn.grnNo} because referenced Purchase Order ${po.purchaseNo || po.id} is deactivated/inactive.`);
+                    }
+                }
+            }
+
             const preparedLineItems: any[] = [];
             for (let index = 0; index < lineItems.length; index++) {
                 const lineItem = lineItems[index];
@@ -329,6 +347,26 @@ const QualityReportController = {
             if (!headerPayload.inspectionDate || Number.isNaN(headerPayload.inspectionDate.getTime())) {
                 res.status(StatusCodes.BAD_REQUEST);
                 throw new Error("Valid inspectionDate is required");
+            }
+
+            const targetPoId = headerPayload.poHeaderId ?? existingReport.poHeaderId;
+            const targetGrnId = headerPayload.grnHeaderId ?? existingReport.grnHeaderId;
+            if (targetPoId) {
+                const po = await PurchaseOrder.findOne({ where: { id: targetPoId, CompanyId: companyId }, transaction });
+                if (po && po.isActive === false) {
+                    res.status(StatusCodes.BAD_REQUEST);
+                    throw new Error(`Cannot update Quality Inspection for Purchase Order ${po.purchaseNo || po.id} because it is deactivated/inactive.`);
+                }
+            }
+            if (targetGrnId) {
+                const grn = await GRN.findOne({ where: { id: targetGrnId, CompanyId: companyId }, transaction });
+                if (grn && grn.purchaseOrderId) {
+                    const po = await PurchaseOrder.findOne({ where: { id: grn.purchaseOrderId, CompanyId: companyId }, transaction });
+                    if (po && po.isActive === false) {
+                        res.status(StatusCodes.BAD_REQUEST);
+                        throw new Error(`Cannot update Quality Inspection for GRN ${grn.grnNo} because referenced Purchase Order ${po.purchaseNo || po.id} is deactivated/inactive.`);
+                    }
+                }
             }
 
             await existingReport.update(headerPayload, { transaction });
