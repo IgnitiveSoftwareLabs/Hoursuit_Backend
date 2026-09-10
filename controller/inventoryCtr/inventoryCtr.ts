@@ -23,11 +23,140 @@ interface CustomRequest extends Request {
     user?: any;
 }
 
+const buildInventoryFilterClause = (companyId: number, query: any) => {
+    const {
+        search,
+        warehouseId,
+        clientId,
+        customerId,
+        godownId,
+        stackId,
+        location,
+        presetView,
+        showZeroBalances,
+        startDate,
+        endDate,
+    } = query;
+
+    const andConditions: any[] = [
+        { CompanyId: companyId },
+        { isActive: true },
+    ];
+
+    const clientFilterId = clientId || customerId;
+    if (clientFilterId) {
+        andConditions.push({ customer_id: clientFilterId });
+    }
+
+    if (warehouseId) {
+        andConditions.push({ warehouseId: Number(warehouseId) });
+    }
+
+    if (godownId) {
+        andConditions.push({ godownId: Number(godownId) });
+    }
+
+    if (stackId) {
+        andConditions.push({ stack: Number(stackId) });
+    }
+
+    // Zero balance filter
+    const isZeroBalanceAllowed = showZeroBalances === true || showZeroBalances === 'true';
+    if (!isZeroBalanceAllowed && presetView !== 'in_stock') {
+        andConditions.push({ qty: { [Op.gt]: 0 } });
+    }
+
+    // Preset view filter
+    if (presetView === 'in_stock') {
+        andConditions.push({ qty: { [Op.gt]: 0 } });
+    } else if (presetView === 'aging') {
+        andConditions.push({ inventory_age: { [Op.gte]: 60 } });
+    } else if (presetView === 'high_value') {
+        andConditions.push({ amount: { [Op.gte]: 10000 } });
+    }
+
+    // Location filter
+    if (location && location !== 'all' && String(location).trim() !== '') {
+        const locTerm = String(location).trim().replace(/'/g, "''");
+        andConditions.push({
+            [Op.or]: [
+                { location: { [Op.iLike]: `%${locTerm}%` } },
+                InventoryCount.sequelize!.literal(`EXISTS (
+                    SELECT 1 FROM warehouses w WHERE w.id = "InventoryCount"."warehouseId" AND w.name ILIKE '%${locTerm}%'
+                )`),
+                InventoryCount.sequelize!.literal(`EXISTS (
+                    SELECT 1 FROM item_masters im 
+                    LEFT JOIN cities c ON c.id = im.location_id 
+                    WHERE im.id = "InventoryCount"."item_id" AND c.city_name ILIKE '%${locTerm}%'
+                )`),
+            ]
+        });
+    }
+
+    // Date range filter
+    if (startDate && endDate) {
+        const start = new Date(startDate as string);
+        start.setHours(0, 0, 0, 0);
+        const end = new Date(endDate as string);
+        end.setHours(23, 59, 59, 999);
+        andConditions.push({
+            createdAt: { [Op.between]: [start, end] }
+        });
+    }
+
+    // Search filter
+    if (search && String(search).trim() !== '') {
+        const term = String(search).trim().replace(/'/g, "''");
+        andConditions.push({
+            [Op.or]: [
+                { location: { [Op.iLike]: `%${term}%` } },
+                { lot_number: { [Op.iLike]: `%${term}%` } },
+                { work_order: { [Op.iLike]: `%${term}%` } },
+                InventoryCount.sequelize!.literal(`EXISTS (
+                    SELECT 1 FROM item_masters im 
+                    WHERE im.id = "InventoryCount"."item_id" 
+                    AND (im.item_name ILIKE '%${term}%' OR im.item_code ILIKE '%${term}%')
+                )`),
+                InventoryCount.sequelize!.literal(`EXISTS (
+                    SELECT 1 FROM customers c 
+                    WHERE c.id = "InventoryCount"."customer_id" 
+                    AND c.name ILIKE '%${term}%'
+                )`),
+                InventoryCount.sequelize!.literal(`EXISTS (
+                    SELECT 1 FROM warehouses w 
+                    WHERE w.id = "InventoryCount"."warehouseId" 
+                    AND w.name ILIKE '%${term}%'
+                )`),
+                InventoryCount.sequelize!.literal(`EXISTS (
+                    SELECT 1 FROM godowns g 
+                    WHERE g.id = "InventoryCount"."godownId" 
+                    AND g.name ILIKE '%${term}%'
+                )`),
+            ]
+        });
+    }
+
+    return { [Op.and]: andConditions };
+};
+
+const getInventorySortOrder = (sortBy?: string, sortOrder?: string): any[] => {
+    const sortOrderStr = (sortOrder as string)?.toUpperCase() === 'ASC' ? 'ASC' : 'DESC';
+    if (sortBy === 'item_code' || sortBy === 'itemCode') {
+        return [[{ model: ItemMaster, as: 'item' }, 'item_code', sortOrderStr]];
+    }
+    if (sortBy === 'item_name' || sortBy === 'itemName') {
+        return [[{ model: ItemMaster, as: 'item' }, 'item_name', sortOrderStr]];
+    }
+    const allowedDirectFields = ['id', 'qty', 'rate', 'amount', 'inventory_age', 'location', 'createdAt', 'updatedAt', 'work_order', 'lot_number'];
+    if (sortBy && allowedDirectFields.includes(sortBy)) {
+        return [[sortBy, sortOrderStr]];
+    }
+    return [['updatedAt', sortOrderStr]];
+};
+
 const InventoryController = {
     // GET ALL INVENTORY BALANCES for current user's company with search, pagination, and stats
     getAllInventoryBalances: asyncHandler(async (req: CustomRequest, res: Response) => {
-        const UserId = req.user.id;
-
         const company = await findCompanyForUser(req.user);
         if (!company) {
             res.status(StatusCodes.NOT_FOUND);
@@ -36,62 +165,19 @@ const InventoryController = {
 
         // Extract query parameters
         const {
-            search,
             page = 1,
-            limit = 10,
-            warehouseId,
-
-            clientId,
-            commodityId,
-            godownId,
-            stackId,
+            limit = 25,
             sortBy = 'updatedAt',
             sortOrder = 'DESC'
         } = req.query;
 
-        // Map frontend sort fields to actual database columns
-        const sortFieldMapping: { [key: string]: string } = {
-            'id': 'id',
-            //   'weight': 'measurment_or_weight',
-            //   'quantity': 'details_of_number_of_bags_sacks',
-            'createdAt': 'createdAt',
-            'updatedAt': 'updatedAt',
-            'last_updated': 'last_updated'
-        };
-
-        const actualSortField = sortFieldMapping[sortBy as string] || 'updatedAt';
-
         const pageNumber = parseInt(page as string, 10) || 1;
-        const pageSize = parseInt(limit as string, 10) || 10;
+        const pageSize = parseInt(limit as string, 10) || 25;
         const offset = (pageNumber - 1) * pageSize;
 
         // Build dynamic where clause
-        let whereClause: any = { CompanyId: company.id };
-
-        // Client filter
-        if (clientId) {
-            whereClause.customerId = clientId;
-        }
-
-        // Warehouse filter
-        if (warehouseId) {
-            whereClause.warehouseId = warehouseId;
-        }
-
-        // Commodity filter
-        // if (commodityId) {
-        //   whereClause.CommodityId = commodityId;
-        // }
-
-        // Godown filter
-        if (godownId) {
-            whereClause.GodownId = godownId;
-        }
-
-        // Stack filter
-        if (stackId) {
-            whereClause.StackId = stackId;
-        }
+        const finalWhereClause = buildInventoryFilterClause(company.id, req.query);
+        const order = getInventorySortOrder(sortBy as string, sortOrder as string);
 
         const itemIncludeConfig = {
             model: ItemMaster,
@@ -139,30 +225,6 @@ const InventoryController = {
             { model: Stack, as: "stackDetails" },
         ];
 
-        // Handle search using raw SQL in where clause
-        let finalWhereClause = whereClause;
-        if (search) {
-            const searchTerm = search as string;
-            // Add search condition using Sequelize.literal for complex joins
-            finalWhereClause = {
-                ...whereClause,
-                [Op.or]: [
-                    InventoryCount.sequelize!.literal(`EXISTS (
-            SELECT 1 FROM item_masters im WHERE im.id = InventoryCount.item_id AND (im.item_name LIKE '%${searchTerm}%' OR im.item_code LIKE '%${searchTerm}%')
-          )`),
-                    InventoryCount.sequelize!.literal(`EXISTS (
-            SELECT 1 FROM customers c WHERE c.id = InventoryCount.customer_id AND c.name LIKE '%${searchTerm}%'
-          )`),
-                    InventoryCount.sequelize!.literal(`EXISTS (
-            SELECT 1 FROM godowns g WHERE g.id = InventoryCount.godown_id AND g.name LIKE '%${searchTerm}%'
-          )`),
-                    InventoryCount.sequelize!.literal(`EXISTS (
-            SELECT 1 FROM stacks s WHERE s.id = InventoryCount.stack_id AND s.name LIKE '%${searchTerm}%'
-          )`),
-                ]
-            };
-        }
-
         // Get paginated data
         const { rows: inventory, count: totalItems } = await InventoryCount.findAndCountAll({
             where: finalWhereClause,
@@ -170,7 +232,7 @@ const InventoryController = {
             offset,
             limit: pageSize,
             distinct: true,
-            order: [[actualSortField, sortOrder as string]],
+            order,
         });
 
         // Calculate statistics for ALL inventory (not just current page)
@@ -648,79 +710,29 @@ const InventoryController = {
     // Export Inventory to CSV
     exportInventoryCSV: asyncHandler(async (req: CustomRequest, res: Response) => {
         const company = await findCompanyForUser(req.user);
-        const CompanyId = company?.id;
-        const { search, customer_id, work_order, item_id, startDate, endDate, material_status_id } = req.query;
-
-        if (!CompanyId) {
+        if (!company) {
             res.status(StatusCodes.UNAUTHORIZED);
             throw new Error("User authentication required");
         }
 
-        let whereClause: any = { CompanyId, isActive: true };
-
-        // Add search filter
-        if (search) {
-            const q = String(search).toLowerCase();
-            whereClause[Op.or] = [
-                InventoryCount.sequelize!.where(
-                    InventoryCount.sequelize!.fn('LOWER', InventoryCount.sequelize!.col('work_order')),
-                    { [Op.like]: `%${q}%` }
-                ),
-                InventoryCount.sequelize!.where(
-                    InventoryCount.sequelize!.fn('LOWER', InventoryCount.sequelize!.col('lot_number')),
-                    { [Op.like]: `%${q}%` }
-                ),
-                InventoryCount.sequelize!.where(
-                    InventoryCount.sequelize!.fn('LOWER', InventoryCount.sequelize!.col('location')),
-                    { [Op.like]: `%${q}%` }
-                )
-            ];
-        }
-
-        // Add filters
-        if (customer_id) {
-            whereClause.customer_id = customer_id;
-        }
-
-        if (work_order) {
-            const q = String(work_order).toLowerCase();
-            whereClause.work_order = InventoryCount.sequelize!.where(
-                InventoryCount.sequelize!.fn('LOWER', InventoryCount.sequelize!.col('InventoryCount.work_order')),
-                { [Op.like]: `%${q}%` }
-            );
-        }
-
-        if (item_id) {
-            whereClause.item_id = item_id;
-        }
-
-        if (material_status_id) {
-            whereClause.material_status_id = material_status_id;
-        }
-
-        // Add date range filter
-        if (startDate && endDate) {
-            const start = new Date(startDate as string);
-            const end = new Date(endDate as string);
-
-            // Set start date to beginning of day (00:00:00)
-            start.setHours(0, 0, 0, 0);
-
-            // Set end date to end of day (23:59:59.999)
-            end.setHours(23, 59, 59, 999);
-
-            whereClause.createdAt = {
-                [Op.between]: [start, end]
-            };
-        }
+        const finalWhereClause = buildInventoryFilterClause(company.id, req.query);
+        const { sortBy = 'updatedAt', sortOrder = 'DESC' } = req.query;
+        const order = getInventorySortOrder(sortBy as string, sortOrder as string);
 
         const inventories = await InventoryCount.findAll({
-            where: whereClause,
+            where: finalWhereClause,
             include: [
                 {
                     model: ItemMaster,
                     as: 'item',
-                    attributes: ['id', 'item_code', 'item_name', 'item_desc']
+                    attributes: ['id', 'item_code', 'item_name', 'item_desc'],
+                    include: [
+                        {
+                            model: CityMaster,
+                            as: 'location',
+                            attributes: ['id', 'city_name']
+                        }
+                    ]
                 },
                 {
                     model: UOMMaster,
@@ -732,61 +744,50 @@ const InventoryController = {
                     as: 'customer',
                     attributes: ['id', 'name']
                 },
-                // {
-                //     model: CityMaster,
-                //     as: 'city',
-                //     attributes: ['id', 'city_name']
-                // },
-                // {
-                //     model: SiteMaster,
-                //     as: 'site',
-                //     attributes: ['id', 'site_name']
-                // }
-                // ,
-                // {
-                //     model: StoreMaster,
-                //     as: 'store',
-                //     attributes: ['id', 'store_name']
-                // },
+                {
+                    model: Warehouse,
+                    as: 'warehouse',
+                    attributes: ['id', 'name']
+                },
+                {
+                    model: Godown,
+                    as: 'godown',
+                    attributes: ['id', 'name']
+                },
                 {
                     model: WorkCategory,
                     as: 'workCategory',
                     attributes: ['id', 'work_category_name']
-                },
-                // {
-                //     model: MaterialStatus,
-                //     as: 'materialStatus',
-                //     attributes: ['id', 'material_status_name']
-                // }
+                }
             ],
-            order: [['createdAt', 'DESC']]
+            order,
         });
 
         // Prepare CSV data
-        const csvData = inventories.map((inventory: any) => ({
-            'Work Order': inventory.work_order || '',
-            'Item Code': inventory.item?.item_code || '',
-            'Item Name': inventory.item?.item_name || '',
-            'Item Description': inventory.item?.item_desc || '',
-            'Customer': inventory.customer?.name || '',
-            'City': inventory.city?.city_name || '',
-            'Site': inventory.site?.site_name || '',
-            'Store': inventory.store?.store_name || '',
-            'Work Category': inventory.workCategory?.work_category_name || '',
-            'Material Status': inventory.materialStatus?.material_status_name || '',
-            'Lot Number': inventory.lot_number || '',
-            'Location': inventory.location || '',
-            'Quantity': inventory.qty || 0,
-            'UOM': inventory.uom?.uom_name || '',
-            'Rate': inventory.rate || 0,
-            'Amount': inventory.amount || 0,
-            'Inventory Age (Days)': inventory.inventory_age || 0,
-            'Created Date': inventory.createdAt ? new Date(inventory.createdAt).toLocaleDateString('en-IN') : '',
-            'Last Updated': inventory.updatedAt ? new Date(inventory.updatedAt).toLocaleDateString('en-IN') : ''
-        }));
+        const csvData = inventories.map((inventory: any, index: number) => {
+            const locName = inventory.location || inventory.item?.location?.city_name || inventory.warehouse?.name || 'Main Location';
+            return {
+                '#': index + 1,
+                'Internal ID': inventory.id,
+                'Item Code': inventory.item?.item_code || `ITM-${inventory.item_id || inventory.id}`,
+                'Item Name': inventory.item?.item_name || 'N/A',
+                'Location': locName,
+                'Warehouse': inventory.warehouse?.name || '',
+                'UOM': inventory.uom?.uom_name || 'UNIT',
+                'On Hand Qty': Number(inventory.qty || 0),
+                'Valuation Rate (INR)': Number(inventory.rate || 0).toFixed(2),
+                'Total Value (INR)': Number(inventory.amount || 0).toFixed(2),
+                'Stock Age (Days)': inventory.inventory_age ?? 0,
+                'Lot Number': inventory.lot_number || '',
+                'Work Order': inventory.work_order || '',
+                'Customer': inventory.customer?.name || '',
+                'Last Updated': inventory.updatedAt ? new Date(inventory.updatedAt).toLocaleDateString('en-IN') : '',
+                'Created Date': inventory.createdAt ? new Date(inventory.createdAt).toLocaleDateString('en-IN') : ''
+            };
+        });
 
         // Set response headers for CSV download
-        const fileName = `inventory_export_${new Date().toISOString().split('T')[0]}.csv`;
+        const fileName = `inventory_balances_${new Date().toISOString().split('T')[0]}.csv`;
         res.setHeader('Content-Type', 'text/csv');
         res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
 

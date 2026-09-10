@@ -4,7 +4,7 @@ import { StatusCodes } from "http-status-codes";
 import { Op } from "sequelize";
 
 import { findCompanyForUser } from "../../../../utils/findCompanyForUser";
-import { normalizePurchaseReturnStatus } from "../../../../utils/p2pStatus";
+import { normalizePurchaseReturnStatus, isPurchaseReturnEditable } from "../../../../utils/p2pStatus";
 import { CustomRequest } from "../../../../typeRequest/customReq";
 import sequelize from "../../../../dbconfig/dbconfig";
 import { PurchaseReturnHeader, PurchaseReturnLine } from "../../../../modals/Transactions/purchase/purchaseReturn";
@@ -67,7 +67,7 @@ const PurchaseReturnController = {
             }
 
             const returnDate = header.returnDate ? new Date(header.returnDate) : null;
-            const status = normalizePurchaseReturnStatus(header.status, "DRAFT");
+            const status = normalizePurchaseReturnStatus(header.status, "PENDING_APPROVAL");
 
             const headerPayload: any = {
                 returnNumber: String(header.returnNumber || "").trim(),
@@ -298,58 +298,135 @@ const PurchaseReturnController = {
             throw new Error("User authentication required");
         }
 
-        const { page = 1, limit = 10, search, status } = req.query;
-        const offset = (Number(page) - 1) * Number(limit);
+        const page = Math.max(1, Number(req.query.page) || 1);
+        const limit = Math.max(1, Number(req.query.limit) || 10);
+        const offset = (page - 1) * limit;
+        const { search, status, vendorId, startDate, endDate } = req.query;
+        const option = String(req.query.option) === "true" || (req.query.option as any) === true;
+
         const whereClause: any = { companyId };
 
-        if (search) {
-            whereClause[Op.or] = [
-                { returnNumber: { [Op.like]: `%${search}%` } },
-                { reason: { [Op.like]: `%${search}%` } },
-                { remarks: { [Op.like]: `%${search}%` } },
-            ];
-        }
         if (status) {
             whereClause.status = status;
+        }
+
+        if (vendorId) {
+            whereClause.vendorId = Number(vendorId);
+        }
+
+        if (startDate && endDate) {
+            whereClause.returnDate = {
+                [Op.between]: [new Date(String(startDate)), new Date(String(endDate))]
+            };
+        } else if (startDate) {
+            whereClause.returnDate = { [Op.gte]: new Date(String(startDate)) };
+        } else if (endDate) {
+            whereClause.returnDate = { [Op.lte]: new Date(String(endDate)) };
+        }
+
+        if (search) {
+            const searchStr = String(search).trim();
+            const matchingVendors = await VendorDetails.findAll({
+                where: {
+                    company_id: companyId,
+                    [Op.or]: [
+                        { company_name: { [Op.like]: `%${searchStr}%` } },
+                        { first_name: { [Op.like]: `%${searchStr}%` } },
+                        { last_name: { [Op.like]: `%${searchStr}%` } },
+                    ]
+                },
+                attributes: ["id"]
+            });
+            const vIds = matchingVendors.map((v: any) => v.id);
+
+            const searchOr: any[] = [
+                { returnNumber: { [Op.like]: `%${searchStr}%` } },
+                { reason: { [Op.like]: `%${searchStr}%` } },
+                { remarks: { [Op.like]: `%${searchStr}%` } }
+            ];
+
+            if (vIds.length > 0) {
+                searchOr.push({ vendorId: { [Op.in]: vIds } });
+            }
+
+            if (!isNaN(Number(searchStr))) {
+                searchOr.push({ id: Number(searchStr) });
+            }
+
+            whereClause[Op.or] = searchOr;
+        }
+
+        const sortBy = typeof req.query.sortBy === "string" ? req.query.sortBy : "createdAt";
+        const sortOrder = String(req.query.sortOrder || "DESC").toUpperCase() === "ASC" ? "ASC" : "DESC";
+
+        const sortFieldMap: { [key: string]: any } = {
+            id: [["id", sortOrder]],
+            returnNumber: [["returnNumber", sortOrder]],
+            returnDate: [["returnDate", sortOrder]],
+            totalAmount: [["totalAmount", sortOrder]],
+            status: [["status", sortOrder]],
+            createdAt: [["createdAt", sortOrder]],
+            updatedAt: [["updatedAt", sortOrder]],
+        };
+
+        const orderClause = sortFieldMap[sortBy] || [["createdAt", "DESC"]];
+
+        const includeConfig = [
+            {
+                model: PurchaseInvoiceHeader,
+                as: "purchaseInvoiceHeader",
+                attributes: ["id", "invoiceNumber"],
+                required: false,
+            },
+            {
+                model: PurchaseOrder,
+                as: "purchaseOrderHeader",
+                attributes: ["id", "purchaseNo"],
+                required: false,
+            },
+            {
+                model: VendorDetails,
+                as: "vendor",
+                attributes: ["id", "company_name", "first_name", "last_name"],
+                required: false,
+            },
+            {
+                model: GRN,
+                as: "grnHeader",
+                attributes: ["id", "grnNo"],
+                required: false,
+            },
+            {
+                model: PurchaseReturnLine,
+                as: "purchaseReturnLines",
+                required: false,
+                include: [itemIncludeConfig],
+            },
+        ];
+
+        if (option) {
+            const returns = await PurchaseReturnHeader.findAll({
+                where: whereClause,
+                include: includeConfig,
+                order: orderClause,
+            });
+
+            res.status(StatusCodes.OK).json({
+                success: true,
+                message: "Purchase returns fetched successfully",
+                result: returns,
+                total: returns.length,
+            });
+            return;
         }
 
         const total = await PurchaseReturnHeader.count({ where: whereClause });
         const returns = await PurchaseReturnHeader.findAll({
             where: whereClause,
-            include: [
-                {
-                    model: PurchaseInvoiceHeader,
-                    as: "purchaseInvoiceHeader",
-                    attributes: ["id", "invoiceNumber"],
-                    required: false,
-                },
-                {
-                    model: PurchaseOrder,
-                    as: "purchaseOrderHeader",
-                    attributes: ["id", "purchaseNo"],
-                    required: false,
-                },
-                {
-                    model: VendorDetails,
-                    as: "vendor",
-                    required: false,
-                },
-                {
-                    model: GRN,
-                    as: "grnHeader",
-                    attributes: ["id", "grnNo"],
-                    required: false,
-                },
-                {
-                    model: PurchaseReturnLine,
-                    as: "purchaseReturnLines",
-                    required: false,
-                    include: [itemIncludeConfig],
-                },
-            ],
+            include: includeConfig,
             offset,
-            limit: Number(limit),
-            order: [["createdAt", "DESC"]],
+            limit,
+            order: orderClause,
         });
 
         res.status(StatusCodes.OK).json({
@@ -358,11 +435,150 @@ const PurchaseReturnController = {
             result: returns,
             pagination: {
                 total,
-                page: Number(page),
-                limit: Number(limit),
-                totalPages: Math.ceil(total / Number(limit)),
+                page,
+                limit,
+                totalPages: Math.ceil(total / limit),
             },
         });
+    }),
+
+    exportPurchaseReturnsCSV: asyncHandler(async (req: CustomRequest, res: Response) => {
+        const company = await findCompanyForUser(req.user);
+        const companyId = company?.id;
+        const user_id = req.user?.id;
+
+        if (!companyId || !user_id) {
+            res.status(StatusCodes.UNAUTHORIZED);
+            throw new Error("User authentication required");
+        }
+
+        const { search, status, vendorId, startDate, endDate } = req.query;
+        const whereClause: any = { companyId };
+
+        if (status) whereClause.status = status;
+        if (vendorId) whereClause.vendorId = Number(vendorId);
+
+        if (startDate && endDate) {
+            whereClause.returnDate = {
+                [Op.between]: [new Date(String(startDate)), new Date(String(endDate))]
+            };
+        } else if (startDate) {
+            whereClause.returnDate = { [Op.gte]: new Date(String(startDate)) };
+        } else if (endDate) {
+            whereClause.returnDate = { [Op.lte]: new Date(String(endDate)) };
+        }
+
+        if (search) {
+            const searchStr = String(search).trim();
+            whereClause[Op.or] = [
+                { returnNumber: { [Op.like]: `%${searchStr}%` } },
+                { reason: { [Op.like]: `%${searchStr}%` } },
+                { remarks: { [Op.like]: `%${searchStr}%` } }
+            ];
+        }
+
+        const returns = await PurchaseReturnHeader.findAll({
+            where: whereClause,
+            include: [
+                { model: PurchaseInvoiceHeader, as: "purchaseInvoiceHeader", attributes: ["id", "invoiceNumber"] },
+                { model: PurchaseOrder, as: "purchaseOrderHeader", attributes: ["id", "purchaseNo"] },
+                { model: GRN, as: "grnHeader", attributes: ["id", "grnNo"] },
+                { model: VendorDetails, as: "vendor" },
+                {
+                    model: PurchaseReturnLine,
+                    as: "purchaseReturnLines",
+                    include: [itemIncludeConfig]
+                }
+            ],
+            order: [["createdAt", "DESC"]]
+        });
+
+        const formatDateVal = (date: any) => (date ? new Date(date).toISOString().split("T")[0] : "");
+
+        const csvRows: any[] = [];
+        returns.forEach((r: any) => {
+            const vendorName = r.vendor?.company_name || [r.vendor?.first_name, r.vendor?.last_name].filter(Boolean).join(" ") || "";
+            const lines = r.purchaseReturnLines || [];
+
+            if (lines.length > 0) {
+                lines.forEach((l: any, idx: number) => {
+                    const item = l.item || {};
+                    csvRows.push({
+                        "Return Internal ID": r.id,
+                        "Return Authorization #": r.returnNumber || "",
+                        "Return Date": formatDateVal(r.returnDate),
+                        "Status": r.status || "",
+                        "Vendor Name": vendorName,
+                        "PO Reference #": r.purchaseOrderHeader?.purchaseNo || "",
+                        "GRN Reference #": r.grnHeader?.grnNo || "",
+                        "Bill Reference #": r.purchaseInvoiceHeader?.invoiceNumber || "",
+                        "Total Return Amount": Number(r.totalAmount || 0).toFixed(2),
+                        "Reason": r.reason || "",
+                        "Header Remarks": r.remarks || "",
+                        "Created Date": formatDateVal(r.createdAt),
+                        "Line #": idx + 1,
+                        "Item Code": item.item_code || "",
+                        "Item Name": item.item_name || "",
+                        "Item Description": l.itemDescription || item.description || "",
+                        "Return Quantity": l.returnQty || l.quantity || "",
+                        "Unit Price": Number(l.unitPrice || 0).toFixed(2),
+                        "Line Total": Number(l.totalAmount || (Number(l.returnQty || 0) * Number(l.unitPrice || 0))).toFixed(2),
+                        "Line Reason": l.reason || "",
+                        "Line Remarks": l.remarks || ""
+                    });
+                });
+            } else {
+                csvRows.push({
+                    "Return Internal ID": r.id,
+                    "Return Authorization #": r.returnNumber || "",
+                    "Return Date": formatDateVal(r.returnDate),
+                    "Status": r.status || "",
+                    "Vendor Name": vendorName,
+                    "PO Reference #": r.purchaseOrderHeader?.purchaseNo || "",
+                    "GRN Reference #": r.grnHeader?.grnNo || "",
+                    "Bill Reference #": r.purchaseInvoiceHeader?.invoiceNumber || "",
+                    "Total Return Amount": Number(r.totalAmount || 0).toFixed(2),
+                    "Reason": r.reason || "",
+                    "Header Remarks": r.remarks || "",
+                    "Created Date": formatDateVal(r.createdAt),
+                    "Line #": "",
+                    "Item Code": "",
+                    "Item Name": "",
+                    "Item Description": "",
+                    "Return Quantity": "",
+                    "Unit Price": "",
+                    "Line Total": "",
+                    "Line Reason": "",
+                    "Line Remarks": ""
+                });
+            }
+        });
+
+        const defaultHeaders = [
+            "Return Internal ID", "Return Authorization #", "Return Date", "Status", "Vendor Name",
+            "PO Reference #", "GRN Reference #", "Bill Reference #", "Total Return Amount", "Reason",
+            "Header Remarks", "Created Date", "Line #", "Item Code", "Item Name", "Item Description",
+            "Return Quantity", "Unit Price", "Line Total", "Line Reason", "Line Remarks"
+        ];
+
+        const headers = csvRows.length > 0 ? Object.keys(csvRows[0]) : defaultHeaders;
+        const csvContent = [
+            headers.join(","),
+            ...csvRows.map((row) =>
+                headers.map((h) => {
+                    const val = row[h] !== undefined && row[h] !== null ? String(row[h]) : "";
+                    if (val.includes(",") || val.includes('"') || val.includes("\n") || val.includes("\r")) {
+                        return `"${val.replace(/"/g, '""')}"`;
+                    }
+                    return val;
+                }).join(",")
+            )
+        ].join("\n");
+
+        const filename = `purchase_returns_export_${new Date().toISOString().split("T")[0]}.csv`;
+        res.setHeader("Content-Type", "text/csv; charset=utf-8");
+        res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+        res.status(StatusCodes.OK).send(csvContent);
     }),
 
     getPurchaseReturnById: asyncHandler(async (req: CustomRequest, res: Response) => {
@@ -461,13 +677,13 @@ const PurchaseReturnController = {
                 throw new Error("Purchase return not found");
             }
 
-            if (existingReturn.status !== "DRAFT") {
+            if (!isPurchaseReturnEditable(existingReturn.status)) {
                 res.status(StatusCodes.BAD_REQUEST);
-                throw new Error(`Only DRAFT Purchase Returns can be edited. Current status is ${existingReturn.status}.`);
+                throw new Error(`Only pending approval or draft Purchase Returns can be edited. Current status is ${existingReturn.status}.`);
             }
 
             const returnDate = header.returnDate ? new Date(header.returnDate) : existingReturn.returnDate;
-            const status = normalizePurchaseReturnStatus(header.status || existingReturn.status, existingReturn.status || "DRAFT");
+            const status = normalizePurchaseReturnStatus(header.status || existingReturn.status, existingReturn.status || "PENDING_APPROVAL");
 
             const headerPayload: any = {
                 returnNumber: String(header.returnNumber || existingReturn.returnNumber).trim(),
@@ -814,9 +1030,9 @@ const PurchaseReturnController = {
             throw new Error("Purchase return not found");
         }
 
-        if (purchaseReturn.status !== "DRAFT") {
+        if (!isPurchaseReturnEditable(purchaseReturn.status)) {
             res.status(StatusCodes.BAD_REQUEST);
-            throw new Error(`Only DRAFT Purchase Returns can be deleted. Current status is ${purchaseReturn.status}.`);
+            throw new Error(`Only pending approval or draft Purchase Returns can be deleted. Current status is ${purchaseReturn.status}.`);
         }
 
         await PurchaseReturnLine.destroy({ where: { returnHeaderId: purchaseReturn.id } });

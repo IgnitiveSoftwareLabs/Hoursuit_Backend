@@ -4,6 +4,9 @@ import sequelize from "../../dbconfig/dbconfig";
 import Company from "../company/company";
 import User from "../user/user";
 import VoucherTypeMaster from "./voucherType";
+import { VendorDetails } from "../masters/vendorDetails/vendorDetails";
+import Customer from "../masters/customer/customer";
+import EmployeeMaster from "../masters/Employee/employee";
 
 interface JournalEntryHeaderAttributes {
     id: number;
@@ -17,6 +20,9 @@ interface JournalEntryHeaderAttributes {
     total_credit: number;
     source_id: number;
     source_name: string;
+    vendor_id?: number | null;
+    customer_id?: number | null;
+    employee_id?: number | null;
     CompanyId: number;
     user_id: number;
     isActive: boolean;
@@ -42,6 +48,9 @@ class JournalEntryHeader
     public total_credit!: number;
     public source_id!: number;
     public source_name!: string;
+    public vendor_id?: number | null;
+    public customer_id?: number | null;
+    public employee_id?: number | null;
     public CompanyId!: number;
     public user_id!: number;
     public isActive!: boolean;
@@ -58,6 +67,9 @@ class JournalEntryHeader
             narration: Joi.string().max(1000).optional().allow(null),
             source_id: Joi.number().integer().positive().required(),
             source_name: Joi.string().max(100).required(),
+            vendor_id: Joi.number().integer().positive().optional().allow(null),
+            customer_id: Joi.number().integer().positive().optional().allow(null),
+            employee_id: Joi.number().integer().positive().optional().allow(null),
             status: Joi.string().valid("DRAFT", "POSTED", "CANCELLED").required(),
             total_debit: Joi.number().min(0).required(),
             total_credit: Joi.number().min(0).required(),
@@ -122,6 +134,27 @@ JournalEntryHeader.init(
             type: DataTypes.STRING(100),
             allowNull: false,
         },
+        vendor_id: {
+            type: DataTypes.INTEGER.UNSIGNED,
+            allowNull: true,
+            references: { model: VendorDetails, key: "id" },
+            onUpdate: "CASCADE",
+            onDelete: "SET NULL",
+        },
+        customer_id: {
+            type: DataTypes.INTEGER.UNSIGNED,
+            allowNull: true,
+            references: { model: Customer, key: "id" },
+            onUpdate: "CASCADE",
+            onDelete: "SET NULL",
+        },
+        employee_id: {
+            type: DataTypes.INTEGER.UNSIGNED,
+            allowNull: true,
+            references: { model: EmployeeMaster, key: "id" },
+            onUpdate: "CASCADE",
+            onDelete: "SET NULL",
+        },
         CompanyId: {
             type: DataTypes.INTEGER.UNSIGNED,
             allowNull: false,
@@ -175,6 +208,21 @@ JournalEntryHeader.belongsTo(VoucherTypeMaster, {
     as: "voucherType",
     onDelete: "RESTRICT",
 });
+JournalEntryHeader.belongsTo(VendorDetails, {
+    foreignKey: "vendor_id",
+    as: "vendor",
+    onDelete: "SET NULL",
+});
+JournalEntryHeader.belongsTo(Customer, {
+    foreignKey: "customer_id",
+    as: "customer",
+    onDelete: "SET NULL",
+});
+JournalEntryHeader.belongsTo(EmployeeMaster, {
+    foreignKey: "employee_id",
+    as: "employee",
+    onDelete: "SET NULL",
+});
 
 Company.hasMany(JournalEntryHeader, {
     foreignKey: "CompanyId",
@@ -192,6 +240,24 @@ VoucherTypeMaster.hasMany(JournalEntryHeader, {
     foreignKey: "voucher_type_id",
     as: "journalEntryHeaders",
     onDelete: "RESTRICT",
+});
+
+VendorDetails.hasMany(JournalEntryHeader, {
+    foreignKey: "vendor_id",
+    as: "journalEntryHeaders",
+    onDelete: "SET NULL",
+});
+
+Customer.hasMany(JournalEntryHeader, {
+    foreignKey: "customer_id",
+    as: "journalEntryHeaders",
+    onDelete: "SET NULL",
+});
+
+EmployeeMaster.hasMany(JournalEntryHeader, {
+    foreignKey: "employee_id",
+    as: "journalEntryHeaders",
+    onDelete: "SET NULL",
 });
 
 export default JournalEntryHeader;

@@ -11,8 +11,13 @@ import { CustomRequest } from "../../../typeRequest/customReq";
 import sequelize from "../../../dbconfig/dbconfig"; // Ensure your Sequelize instance is imported
 import { PurchaseInvoiceHeader } from "../../../modals/Transactions/purchase/purchaseInvoice";
 import { PurchasePaymentHeader } from "../../../modals/Transactions/purchase/purchasePayment";
-import PurchaseReturnFulfillmentHeader from "../../../modals/Transactions/purchase/purchaseReturn/purchaseReturnFulfillmentHeader";
 import VendorCreditHeader from "../../../modals/Transactions/purchase/vendorCredit/vendorCreditHeader";
+import PurchaseReturnFulfillmentHeader from "../../../modals/Transactions/purchase/purchaseReturn/purchaseReturnFulfillmentHeader";
+import { GRN } from "../../../modals/Transactions/purchase/GRN";
+import { normalizeGRNStatus } from "../../../utils/p2pStatus";
+import { VendorDetails } from "../../../modals/masters/vendorDetails/vendorDetails";
+import Customer from "../../../modals/masters/customer/customer";
+import EmployeeMaster from "../../../modals/masters/Employee/employee";
 
 // Helper function to safely compare floating-point currency numbers
 const isBalanced = (debit: number, credit: number): boolean => {
@@ -21,7 +26,7 @@ const isBalanced = (debit: number, credit: number): boolean => {
 
 const JournalEntryController = {
   createJournalEntry: asyncHandler(async (req: CustomRequest, res: Response) => {
-    const { entry_no, entry_date, source_id, source_name, voucher_type_id, reference_no, narration, status, lines } = req.body;
+    const { entry_no, entry_date, source_id, source_name, voucher_type_id, reference_no, narration, vendor_id, customer_id, employee_id, status, lines } = req.body;
     const userId = req.user?.id;
 
     if (!userId) {
@@ -59,6 +64,9 @@ const JournalEntryController = {
           source_name,
           reference_no: reference_no ?? null,
           narration: narration ?? null,
+          vendor_id: vendor_id ?? null,
+          customer_id: customer_id ?? null,
+          employee_id: employee_id ?? null,
           status: status || "DRAFT",
           total_debit: totalDebit,
           total_credit: totalCredit,
@@ -78,6 +86,9 @@ const JournalEntryController = {
               narration: line.narration ?? null,
               debit_amount: Number(line.debit_amount || 0),
               credit_amount: Number(line.credit_amount || 0),
+              vendor_id: line.vendor_id ?? vendor_id ?? null,
+              customer_id: line.customer_id ?? customer_id ?? null,
+              employee_id: line.employee_id ?? employee_id ?? null,
               CompanyId: company.id,
               user_id: userId,
               isActive: true,
@@ -97,9 +108,17 @@ const JournalEntryController = {
     const populatedEntry = await JournalEntryHeader.findByPk(result.id, {
       include: [
         { association: "voucherType", attributes: ["id", "code", "name"] },
+        { association: "vendor", attributes: ["id", "company_name", "first_name", "last_name", "salutation", "entity_id"] },
+        { association: "customer", attributes: ["id", "name"] },
+        { association: "employee", attributes: ["id", "designation"] },
         {
           association: "lines",
-          include: [{ association: "account", attributes: ["id", "account_number", "account_name"] }],
+          include: [
+            { association: "account", attributes: ["id", "account_number", "account_name"] },
+            { association: "vendor", attributes: ["id", "company_name", "first_name", "last_name", "salutation", "entity_id"] },
+            { association: "customer", attributes: ["id", "name"] },
+            { association: "employee", attributes: ["id", "designation"] },
+          ],
         },
       ],
     });
@@ -128,9 +147,17 @@ const JournalEntryController = {
       where: { CompanyId: company.id },
       include: [
         { association: "voucherType", attributes: ["id", "code", "name"] },
+        { association: "vendor", attributes: ["id", "company_name", "first_name", "last_name", "salutation", "entity_id"] },
+        { association: "customer", attributes: ["id", "name"] },
+        { association: "employee", attributes: ["id", "designation"] },
         {
           association: "lines",
-          include: [{ association: "account", attributes: ["id", "account_number", "account_name"] }],
+          include: [
+            { association: "account", attributes: ["id", "account_number", "account_name"] },
+            { association: "vendor", attributes: ["id", "company_name", "first_name", "last_name", "salutation", "entity_id"] },
+            { association: "customer", attributes: ["id", "name"] },
+            { association: "employee", attributes: ["id", "designation"] },
+          ],
         },
       ],
       order: [["entry_date", "DESC"], ["id", "DESC"]],
@@ -186,6 +213,18 @@ const JournalEntryController = {
         ],
       };
     } else if (normalizedKey === "purchasereturnfulfillment" || normalizedKey === "returnfulfillment") {
+      const fulfillment = await PurchaseReturnFulfillmentHeader.findOne({
+        where: { id: Number(id), companyId: company.id },
+      });
+      const fStatus = String(fulfillment?.status || "").toUpperCase();
+      if (fulfillment && (fStatus === "PENDING_APPROVAL" || fStatus === "DRAFT")) {
+        res.status(StatusCodes.OK).json({
+          message: "No GL impact recorded for Purchase Return Fulfillment in Pending Approval or Draft status",
+          success: true,
+          result: null,
+        });
+        return;
+      }
       whereClause = {
         CompanyId: company.id,
         source_id: Number(id),
@@ -204,6 +243,19 @@ const JournalEntryController = {
         ],
       };
     } else if (normalizedKey === "grn") {
+      const grn = await GRN.findOne({
+        where: { id: Number(id), CompanyId: company.id },
+      });
+      const normStatus = grn ? normalizeGRNStatus(grn.status) : "";
+      const rawStatus = grn ? String(grn.status || "").toUpperCase() : "";
+      if (rawStatus === "PENDING_RECEIPT" || rawStatus === "DRAFT" || normStatus === "PENDING_RECEIPT" || normStatus === "DRAFT") {
+        res.status(StatusCodes.OK).json({
+          message: "No GL impact recorded for GRN in Pending Receipt or Draft status",
+          success: true,
+          result: null,
+        });
+        return;
+      }
       whereClause = {
         CompanyId: company.id,
         source_id: Number(id),
@@ -300,11 +352,35 @@ const JournalEntryController = {
           attributes: ["id", "code", "name"],
         },
         {
+          association: "vendor",
+          attributes: ["id", "company_name", "first_name", "last_name", "salutation", "entity_id"],
+        },
+        {
+          association: "customer",
+          attributes: ["id", "name"],
+        },
+        {
+          association: "employee",
+          attributes: ["id", "designation"],
+        },
+        {
           association: "lines",
           include: [
             {
               association: "account",
               attributes: ["id", "account_number", "account_name"],
+            },
+            {
+              association: "vendor",
+              attributes: ["id", "company_name", "first_name", "last_name", "salutation", "entity_id"],
+            },
+            {
+              association: "customer",
+              attributes: ["id", "name"],
+            },
+            {
+              association: "employee",
+              attributes: ["id", "designation"],
             },
           ],
         },
@@ -322,7 +398,7 @@ const JournalEntryController = {
     }
 
     // Combine lines by account and debit/credit side
-    const groupLinesByAccount = (rawLines: any[]) => {
+    const groupLinesByAccount = (rawLines: any[], headerVendor?: any, headerCustomer?: any, headerEmployee?: any) => {
       const map = new Map<string, any>();
       for (const line of rawLines) {
         const isTaxLine = (line.narration || "").toLowerCase().includes("gst") || (line.narration || "").toLowerCase().includes("tax");
@@ -347,12 +423,29 @@ const JournalEntryController = {
           accName = "Inventory Asset";
         }
 
+        const vObj = line.vendor || headerVendor;
+        const cObj = line.customer || headerCustomer;
+        const eObj = line.employee || headerEmployee;
+
+        const vendorDisplayName = vObj
+          ? (vObj.company_name || [vObj.salutation, vObj.first_name, vObj.last_name].filter(Boolean).join(" "))
+          : "";
+        const customerDisplayName = cObj?.name || "";
+        const employeeDisplayName = eObj?.designation || "";
+        const entityDisplayName = vendorDisplayName || customerDisplayName || employeeDisplayName || "";
+
         const key = `${accName}_${side}`;
 
         if (map.has(key)) {
           const existing = map.get(key);
           existing.debit_amount = Number((Number(existing.debit_amount || 0) + Number(line.debit_amount || line.debit || 0)).toFixed(2));
           existing.credit_amount = Number((Number(existing.credit_amount || 0) + Number(line.credit_amount || line.credit || 0)).toFixed(2));
+          if (!existing.vendor_name && vendorDisplayName) {
+            existing.vendor_name = vendorDisplayName;
+          }
+          if (!existing.entity_name && entityDisplayName) {
+            existing.entity_name = entityDisplayName;
+          }
           if (line.narration && !existing.narration.includes(line.narration)) {
             existing.narration = `${existing.narration}; ${line.narration}`;
           }
@@ -362,10 +455,18 @@ const JournalEntryController = {
             account_id: line.account_id,
             account_number: accNum,
             account_name: accName,
+            vendor_id: line.vendor_id || vObj?.id || null,
+            customer_id: line.customer_id || cObj?.id || null,
+            employee_id: line.employee_id || eObj?.id || null,
+            vendor_name: vendorDisplayName || null,
+            entity_name: entityDisplayName || null,
             debit_amount: Number(Number(line.debit_amount || line.debit || 0).toFixed(2)),
             credit_amount: Number(Number(line.credit_amount || line.credit || 0).toFixed(2)),
             narration: line.narration || line.memo || "GL Impact Entry",
             account: line.account || { id: line.account_id, account_number: accNum, account_name: accName },
+            vendor: vObj || undefined,
+            customer: cObj || undefined,
+            employee: eObj || undefined,
           });
         }
       }
@@ -374,7 +475,7 @@ const JournalEntryController = {
 
     if (entries.length === 1) {
       const entryObj: any = typeof (entries[0] as any).toJSON === "function" ? (entries[0] as any).toJSON() : { ...(entries[0] as any) };
-      entryObj.lines = groupLinesByAccount(entryObj.lines || []);
+      entryObj.lines = groupLinesByAccount(entryObj.lines || [], entryObj.vendor, entryObj.customer, entryObj.employee);
       res.status(StatusCodes.OK).json({
         message: "Journal entry fetched successfully",
         success: true,
@@ -383,7 +484,13 @@ const JournalEntryController = {
       return;
     }
 
-    const combinedLines = groupLinesByAccount(entries.flatMap((e: any) => e.lines || []));
+    const firstEntry = entries[0] as any;
+    const combinedLines = groupLinesByAccount(
+      entries.flatMap((e: any) => e.lines || []),
+      firstEntry.vendor,
+      firstEntry.customer,
+      firstEntry.employee
+    );
     const totalDebit = Number(combinedLines.reduce((s: number, l: any) => s + Number(l.debit_amount || 0), 0).toFixed(2));
     const totalCredit = Number(combinedLines.reduce((s: number, l: any) => s + Number(l.credit_amount || 0), 0).toFixed(2));
 
@@ -393,6 +500,12 @@ const JournalEntryController = {
       entry_date: entries[0].entry_date,
       source_name: entries[0].source_name,
       source_id: entries[0].source_id,
+      vendor_id: firstEntry.vendor_id || null,
+      customer_id: firstEntry.customer_id || null,
+      employee_id: firstEntry.employee_id || null,
+      vendor: firstEntry.vendor,
+      customer: firstEntry.customer,
+      employee: firstEntry.employee,
       reference_no: entries.map((e: any) => e.reference_no).filter(Boolean).join(", "),
       narration: entries.map((e: any) => e.narration).filter(Boolean).join(" | "),
       status: "POSTED",
@@ -411,7 +524,19 @@ const JournalEntryController = {
 
   updateJournalEntry: asyncHandler(async (req: CustomRequest, res: Response) => {
     const { id } = req.params;
-    const { entry_no, entry_date, source_id, voucher_type_id, reference_no, narration, status, lines } = req.body;
+    const {
+      entry_no,
+      entry_date,
+      source_id,
+      voucher_type_id,
+      vendor_id,
+      customer_id,
+      employee_id,
+      reference_no,
+      narration,
+      status,
+      lines,
+    } = req.body;
     const userId = req.user?.id;
 
     if (!id || isNaN(Number(id))) {
@@ -461,6 +586,9 @@ const JournalEntryController = {
               {
                 journal_entry_id: entry.id,
                 account_id: line.account_id,
+                vendor_id: line.vendor_id ?? vendor_id ?? null,
+                customer_id: line.customer_id ?? customer_id ?? null,
+                employee_id: line.employee_id ?? employee_id ?? null,
                 narration: line.narration ?? null,
                 debit_amount: Number(line.debit_amount || 0),
                 credit_amount: Number(line.credit_amount || 0),
@@ -481,6 +609,9 @@ const JournalEntryController = {
       entry.entry_date = entry_date ?? entry.entry_date;
       entry.source_id = source_id ?? entry.source_id;
       entry.voucher_type_id = voucher_type_id ?? entry.voucher_type_id;
+      entry.vendor_id = vendor_id ?? entry.vendor_id;
+      entry.customer_id = customer_id ?? entry.customer_id;
+      entry.employee_id = employee_id ?? entry.employee_id;
       entry.reference_no = reference_no ?? entry.reference_no;
       entry.narration = narration ?? entry.narration;
       entry.status = status ?? entry.status;
@@ -492,9 +623,17 @@ const JournalEntryController = {
     const result = await JournalEntryHeader.findByPk(entry.id, {
       include: [
         { association: "voucherType", attributes: ["id", "code", "name"] },
+        { association: "vendor", attributes: ["id", "company_name", "first_name", "last_name", "salutation", "entity_id"] },
+        { association: "customer", attributes: ["id", "name"] },
+        { association: "employee", attributes: ["id", "designation"] },
         {
           association: "lines",
-          include: [{ association: "account", attributes: ["id", "account_number", "account_name"] }],
+          include: [
+            { association: "account", attributes: ["id", "account_number", "account_name"] },
+            { association: "vendor", attributes: ["id", "company_name", "first_name", "last_name", "salutation", "entity_id"] },
+            { association: "customer", attributes: ["id", "name"] },
+            { association: "employee", attributes: ["id", "designation"] },
+          ],
         },
       ],
     });

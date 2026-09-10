@@ -24,12 +24,21 @@ interface GRNAttributes {
     driverPhoneNo?: string | null;
     memo?: string | null;
     status:
+    | "PENDING_RECEIPT"
+    | "APPROVED"
+    | "PARTIALLY_RECEIVED"
+    | "PENDING_BILLING"
+    | "PENDING_BILLING_PARTIALLY_RECEIVED"
+    | "FULLY_BILLED"
+    | "CLOSED"
+    | "CANCELLED"
+    | "REJECTED"
     | "DRAFT"
     | "RECEIVED"
     | "QC_PENDING"
     | "QC_COMPLETED"
     | "COMPLETED"
-    | "CANCELLED";
+    | "BILLED";
     remarks?: string | null;
     CompanyId: number;
     user_id: number;
@@ -71,12 +80,21 @@ class GRN
     public driverPhoneNo?: string | null;
     public memo?: string | null;
     public status!:
+        | "PENDING_RECEIPT"
+        | "APPROVED"
+        | "PARTIALLY_RECEIVED"
+        | "PENDING_BILLING"
+        | "PENDING_BILLING_PARTIALLY_RECEIVED"
+        | "FULLY_BILLED"
+        | "CLOSED"
+        | "CANCELLED"
+        | "REJECTED"
         | "DRAFT"
         | "RECEIVED"
         | "QC_PENDING"
         | "QC_COMPLETED"
         | "COMPLETED"
-        | "CANCELLED";
+        | "BILLED";
     public remarks?: string | null;
     public CompanyId!: number;
     public user_id!: number;
@@ -97,13 +115,22 @@ class GRN
             driverPhoneNo: Joi.string().max(100).optional().allow(null, ""),
             memo: Joi.string().max(1000).optional().allow(null, ""),
             status: Joi.string().valid(
+                "PENDING_RECEIPT",
+                "APPROVED",
+                "PARTIALLY_RECEIVED",
+                "PENDING_BILLING",
+                "PENDING_BILLING_PARTIALLY_RECEIVED",
+                "FULLY_BILLED",
+                "CLOSED",
+                "CANCELLED",
+                "REJECTED",
                 "DRAFT",
                 "RECEIVED",
                 "QC_PENDING",
                 "QC_COMPLETED",
                 "COMPLETED",
-                "CANCELLED"
-            ).required(),
+                "BILLED"
+            ).optional(),
             remarks: Joi.string().max(1000).optional().allow(null, ""),
             CompanyId: Joi.number().integer().positive().required(),
             user_id: Joi.number().integer().positive().required(),
@@ -187,15 +214,24 @@ GRN.init(
         },
         status: {
             type: DataTypes.ENUM(
+                "PENDING_RECEIPT",
+                "APPROVED",
+                "PARTIALLY_RECEIVED",
+                "PENDING_BILLING",
+                "PENDING_BILLING_PARTIALLY_RECEIVED",
+                "FULLY_BILLED",
+                "CLOSED",
+                "CANCELLED",
+                "REJECTED",
                 "DRAFT",
                 "RECEIVED",
                 "QC_PENDING",
                 "QC_COMPLETED",
                 "COMPLETED",
-                "CANCELLED"
+                "BILLED"
             ),
             allowNull: false,
-            defaultValue: "DRAFT",
+            defaultValue: "PENDING_RECEIPT",
         },
         remarks: {
             type: DataTypes.TEXT,

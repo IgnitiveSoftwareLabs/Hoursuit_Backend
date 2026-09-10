@@ -18,7 +18,22 @@ export interface PurchaseReturnHeaderAttributes {
     purchaseInvoiceHeaderId?: number | null;
     grnHeaderId?: number | null;
     returnDate: Date;
-    status: "DRAFT" | "AUTHORIZED" | "APPROVED" | "PARTIALLY_FULFILLED" | "FULFILLED" | "RETURNED" | "CANCELLED";
+    status:
+        | "PENDING_APPROVAL"
+        | "PENDING_RETURN"
+        | "PARTIALLY_RETURNED"
+        | "PENDING_CREDIT"
+        | "PENDING_CREDIT_PARTIALLY_RETURNED"
+        | "CREDITED"
+        | "CLOSED"
+        | "CANCELLED"
+        | "REJECTED"
+        | "DRAFT"
+        | "AUTHORIZED"
+        | "APPROVED"
+        | "PARTIALLY_FULFILLED"
+        | "FULFILLED"
+        | "RETURNED";
     subtotal?: number | null;
     discountAmount?: number | null;
     taxAmount?: number | null;
@@ -67,7 +82,22 @@ class PurchaseReturnHeader
     public vendorId!: number;
     public grnHeaderId!: number | null;
     public returnDate!: Date;
-    public status!: "DRAFT" | "AUTHORIZED" | "APPROVED" | "PARTIALLY_FULFILLED" | "FULFILLED" | "RETURNED" | "CANCELLED";
+    public status!:
+        | "PENDING_APPROVAL"
+        | "PENDING_RETURN"
+        | "PARTIALLY_RETURNED"
+        | "PENDING_CREDIT"
+        | "PENDING_CREDIT_PARTIALLY_RETURNED"
+        | "CREDITED"
+        | "CLOSED"
+        | "CANCELLED"
+        | "REJECTED"
+        | "DRAFT"
+        | "AUTHORIZED"
+        | "APPROVED"
+        | "PARTIALLY_FULFILLED"
+        | "FULFILLED"
+        | "RETURNED";
     public subtotal!: number | null;
     public discountAmount!: number | null;
     public taxAmount!: number | null;
@@ -87,7 +117,7 @@ class PurchaseReturnHeader
             purchaseOrderHeaderId: Joi.number().integer().positive().optional().allow(null),
             purchaseInvoiceHeaderId: Joi.number().integer().positive().optional().allow(null),
             returnDate: Joi.date().required(),
-            status: Joi.string().required(),
+            status: Joi.string().optional(),
             subtotal: Joi.number().optional().allow(null),
             discountAmount: Joi.number().optional().allow(null),
             taxAmount: Joi.number().optional().allow(null),
@@ -138,17 +168,9 @@ PurchaseReturnHeader.init(
             allowNull: false,
         },
         status: {
-            type: DataTypes.ENUM(
-                "DRAFT",
-                "AUTHORIZED",
-                "APPROVED",
-                "PARTIALLY_FULFILLED",
-                "FULFILLED",
-                "RETURNED",
-                "CANCELLED"
-            ),
+            type: DataTypes.STRING(50),
             allowNull: false,
-            defaultValue: "DRAFT",
+            defaultValue: "PENDING_APPROVAL",
         },
         subtotal: {
             type: DataTypes.DECIMAL(18, 2),

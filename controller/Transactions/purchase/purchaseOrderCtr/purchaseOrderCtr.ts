@@ -25,6 +25,7 @@ import { GRN } from "../../../../modals/Transactions/purchase/GRN";
 import { InventoryService } from "../../../../utils/inventoryService";
 import { CustomRequest } from "../../../../typeRequest/customReq";
 import UOMMaster from "../../../../modals/masters/UOM/UOMMaster";
+import User from "../../../../modals/user/user";
 import {
     PurchaseOrder,
     PurchaseOrderLine,
@@ -189,7 +190,7 @@ const PurchaseOrderController = {
                 billing_address,
                 class_id: normalizeOptionalId(header.class_id),
                 department_id: normalizeOptionalId(header.department_id),
-                status: normalizePurchaseOrderStatus(header.status, "DRAFT"),
+                status: normalizePurchaseOrderStatus(header.status, "PENDING_APPROVAL"),
                 isActive: header.isActive !== undefined ? Boolean(header.isActive) : true,
                 remarks: header.remarks || null,
                 CompanyId,
@@ -323,6 +324,10 @@ const PurchaseOrderController = {
                 createdLineItems.push(createdLine);
             }
 
+            if (headerPayload.status === "APPROVED") {
+                await InventoryService.syncPurchaseOrderStatus(createdHeader.id, CompanyId, transaction);
+            }
+
             await transaction.commit();
 
             res.status(StatusCodes.CREATED).json({
@@ -339,7 +344,7 @@ const PurchaseOrderController = {
         }
     }),
 
-    // Fetch all purchase orders with pagination and optional search
+    // Fetch all purchase orders with pagination, sorting, advanced search, filtering, and pagination bypass option
     getAllPurchaseOrder: asyncHandler(async (req: CustomRequest, res: Response) => {
         const company = await findCompanyForUser(req.user);
         const CompanyId = company?.id;
@@ -350,121 +355,263 @@ const PurchaseOrderController = {
             throw new Error("User authentication required");
         }
 
-        const { page = 1, limit = 10, search } = req.query;
-        const offset = (Number(page) - 1) * Number(limit);
+        const option = req.query.option === "true";
+        const page = Math.max(1, parseInt(req.query.page as string, 10) || 1);
+        const limit = Math.max(1, parseInt(req.query.limit as string, 10) || 10);
+        const offset = (page - 1) * limit;
+        const search = typeof req.query.search === "string" ? req.query.search.trim() : "";
 
         const whereClause: any = {
             CompanyId,
         };
-        if (req.query.isActive !== undefined && req.query.isActive !== "") {
+
+        // Active / Inactive filter
+        if (req.query.isActive !== undefined && req.query.isActive !== "" && req.query.isActive !== "all") {
             whereClause.isActive = String(req.query.isActive).toLowerCase() === "true";
-        }
-        if (search) {
-            whereClause[Op.or] = [
-                { purchaseNo: { [Op.like]: `%${search}%` } },
-                { work_order_no: { [Op.like]: `%${search}%` } },
-            ];
+        } else if (req.query.showInactives !== undefined && req.query.showInactives !== "") {
+            const showInactivesBool = String(req.query.showInactives).toLowerCase() === "true";
+            if (!showInactivesBool) {
+                whereClause.isActive = true;
+            }
         }
 
+        // Status filter
+        if (req.query.status && req.query.status !== "" && req.query.status !== "ALL") {
+            const statusVal = String(req.query.status).trim();
+            if (statusVal === "PENDING_APPROVAL" || statusVal === "DRAFT") {
+                whereClause.status = { [Op.in]: ["PENDING_APPROVAL", "DRAFT"] };
+            } else if (statusVal === "PARTIALLY_RECEIVED" || statusVal === "PARTIAL_RECEIVED") {
+                whereClause.status = { [Op.in]: ["PARTIALLY_RECEIVED", "PARTIAL_RECEIVED"] };
+            } else if (statusVal === "CLOSED" || statusVal === "COMPLETED") {
+                whereClause.status = { [Op.in]: ["CLOSED", "COMPLETED"] };
+            } else {
+                whereClause.status = statusVal;
+            }
+        }
+
+        // Vendor filter
+        const vendorId = req.query.vendorId || req.query.vendor_id;
+        if (vendorId && vendorId !== "" && vendorId !== "ALL") {
+            whereClause.vendor_id = Number(vendorId);
+        }
+
+        // Subsidiary filter
+        const subsidiaryId = req.query.subsidiaryId || req.query.subsidiary_id;
+        if (subsidiaryId && subsidiaryId !== "" && subsidiaryId !== "ALL") {
+            whereClause.subsidiary_id = Number(subsidiaryId);
+        }
+
+        // Department filter
+        const departmentId = req.query.departmentId || req.query.department_id;
+        if (departmentId && departmentId !== "" && departmentId !== "ALL") {
+            whereClause.department_id = Number(departmentId);
+        }
+
+        // Class filter
+        const classId = req.query.classId || req.query.class_id;
+        if (classId && classId !== "" && classId !== "ALL") {
+            whereClause.class_id = Number(classId);
+        }
+
+        // Warehouse filter
+        const warehouseId = req.query.warehouseId || req.query.warehouse_id;
+        if (warehouseId && warehouseId !== "" && warehouseId !== "ALL") {
+            whereClause.warehouse_id = Number(warehouseId);
+        }
+
+        // City / Location filter
+        const cityId = req.query.cityId || req.query.city_id;
+        if (cityId && cityId !== "" && cityId !== "ALL") {
+            whereClause.city_id = Number(cityId);
+        }
+
+        // Date range filter on purchaseDate
+        const fromDate = req.query.startDate || req.query.fromDate || req.query.start_date;
+        const toDate = req.query.endDate || req.query.toDate || req.query.end_date;
+        if (fromDate && toDate) {
+            const start = new Date(fromDate as string);
+            start.setHours(0, 0, 0, 0);
+            const end = new Date(toDate as string);
+            end.setHours(23, 59, 59, 999);
+            whereClause.purchaseDate = {
+                [Op.between]: [start, end],
+            };
+        } else if (fromDate) {
+            const start = new Date(fromDate as string);
+            start.setHours(0, 0, 0, 0);
+            whereClause.purchaseDate = {
+                [Op.gte]: start,
+            };
+        } else if (toDate) {
+            const end = new Date(toDate as string);
+            end.setHours(23, 59, 59, 999);
+            whereClause.purchaseDate = {
+                [Op.lte]: end,
+            };
+        }
+
+        // Search condition
+        if (search) {
+            const matchingVendors = await Vendor.findAll({
+                where: {
+                    company_id: CompanyId,
+                    [Op.or]: [
+                        { company_name: { [Op.like]: `%${search}%` } },
+                        { first_name: { [Op.like]: `%${search}%` } },
+                        { last_name: { [Op.like]: `%${search}%` } },
+                    ],
+                },
+                attributes: ["id"],
+            });
+            const vendorIds = matchingVendors.map((v: any) => v.id);
+
+            const searchConditions: any[] = [
+                { purchaseNo: { [Op.like]: `%${search}%` } },
+                { work_order_no: { [Op.like]: `%${search}%` } },
+                { remarks: { [Op.like]: `%${search}%` } },
+            ];
+
+            if (vendorIds.length > 0) {
+                searchConditions.push({ vendor_id: { [Op.in]: vendorIds } });
+            }
+
+            if (!isNaN(Number(search))) {
+                searchConditions.push({ id: Number(search) });
+            }
+
+            whereClause[Op.or] = searchConditions;
+        }
+
+        // Sort configuration
+        const sortBy = typeof req.query.sortBy === "string" ? req.query.sortBy : "createdAt";
+        const sortOrder = String(req.query.sortOrder || "DESC").toUpperCase() === "ASC" ? "ASC" : "DESC";
+
+        const sortFieldMap: { [key: string]: any } = {
+            id: [["id", sortOrder]],
+            purchaseNo: [["purchaseNo", sortOrder]],
+            purchaseDate: [["purchaseDate", sortOrder]],
+            deliveryDate: [["deliveryDate", sortOrder]],
+            status: [["status", sortOrder]],
+            createdAt: [["createdAt", sortOrder]],
+            updatedAt: [["updatedAt", sortOrder]],
+        };
+
+        const orderClause = sortFieldMap[sortBy] || [["createdAt", "DESC"]];
+
+        const poIncludes = [
+            {
+                model: CityMaster,
+                as: "city",
+                attributes: ["id", "city_name"],
+            },
+            {
+                model: Vendor,
+                as: "vendor",
+                attributes: ["id", "company_name", "first_name", "last_name", "salutation", "currency_id"],
+                include: [
+                    { association: "addressBook", include: ["city", "state"] },
+                    { association: "currency" }
+                ]
+            },
+            {
+                model: CurrencyMaster,
+                as: "currency",
+                attributes: ["id", "currency_name", "currency_code", "currency_symbol"],
+                required: false,
+            },
+            {
+                model: VendorAddressBook,
+                as: "vendorAddress",
+                include: ["city", "state"],
+                required: false,
+            },
+            {
+                model: TransportationMode,
+                as: "transportationMode",
+                attributes: ["id", "mode_name"],
+            },
+            {
+                model: Warehouse,
+                as: "warehouse",
+                attributes: ["id", "name"],
+            },
+            {
+                model: Godown,
+                as: "godown",
+                attributes: ["id", "name"],
+                required: false,
+            },
+            {
+                model: Stack,
+                as: "stack",
+                attributes: ["id", "name"],
+                required: false,
+            },
+            {
+                model: SubsidiaryMaster,
+                as: "subsidiary",
+                attributes: ["id", "subsidiary_name"],
+            },
+            {
+                model: ClassMaster,
+                as: "class",
+                required: false,
+            },
+            {
+                model: DepartmentMaster,
+                as: "department",
+                required: false,
+            },
+            {
+                model: PurchaseOrderLine,
+                as: "purchaseOrderLines",
+                required: false,
+                include: [
+                    itemIncludeConfig,
+                    {
+                        model: HSNSACMaster,
+                        as: "hsnSac",
+                        attributes: ["id", "code"],
+                    },
+                    {
+                        model: UOMMaster,
+                        as: "uom",
+                        attributes: ["id", "uom_name"],
+                    },
+                    {
+                        model: WorkCategory,
+                        as: "workCategory",
+                        attributes: ["id", "work_category_name"],
+                    },
+                ],
+            }
+        ];
+
+        // Bypass pagination if option is true
+        if (option) {
+            const purchaseOrders = await PurchaseOrder.findAll({
+                where: whereClause,
+                include: poIncludes,
+                order: orderClause,
+            });
+
+            res.status(StatusCodes.OK).json({
+                message: "Purchase orders fetched successfully",
+                success: true,
+                result: purchaseOrders,
+                total: purchaseOrders.length,
+            });
+            return;
+        }
+
+        // Standard paginated response
         const total = await PurchaseOrder.count({ where: whereClause });
         const purchaseOrders = await PurchaseOrder.findAll({
             where: whereClause,
-            include: [
-                {
-                    model: CityMaster,
-                    as: "city",
-                    attributes: ["id", "city_name"],
-                },
-                {
-                    model: Vendor,
-                    as: "vendor",
-                    attributes: ["id", "company_name", "first_name", "last_name", "salutation", "currency_id"],
-                    include: [
-                        { association: "addressBook", include: ["city", "state"] },
-                        { association: "currency" }
-                    ]
-                },
-                {
-                    model: CurrencyMaster,
-                    as: "currency",
-                    attributes: ["id", "currency_name", "currency_code", "currency_symbol"],
-                    required: false,
-                },
-                {
-                    model: VendorAddressBook,
-                    as: "vendorAddress",
-                    include: ["city", "state"],
-                    required: false,
-                },
-                {
-                    model: TransportationMode,
-                    as: "transportationMode",
-                    attributes: ["id", "mode_name"],
-                },
-                {
-                    model: Warehouse,
-                    as: "warehouse",
-                    attributes: ["id", "name"],
-                },
-                {
-                    model: Godown,
-                    as: "godown",
-                    attributes: ["id", "name"],
-                    required: false,
-                },
-                {
-                    model: Stack,
-                    as: "stack",
-                    attributes: ["id", "name"],
-                    required: false,
-                },
-                {
-                    model: SubsidiaryMaster,
-                    as: "subsidiary",
-                    attributes: ["id", "subsidiary_name"],
-                },
-                {
-                    model: CurrencyMaster,
-                    as: "currency",
-                    required: false,
-                },
-                {
-                    model: ClassMaster,
-                    as: "class",
-                    required: false,
-                },
-                {
-                    model: DepartmentMaster,
-                    as: "department",
-                    required: false,
-                },
-                {
-                    model: PurchaseOrderLine,
-                    as: "purchaseOrderLines",
-                    required: false,
-                    include: [
-                        itemIncludeConfig,
-                        {
-                            model: HSNSACMaster,
-                            as: "hsnSac",
-                            attributes: ["id", "code"],
-                        },
-                        {
-                            model: UOMMaster,
-                            as: "uom",
-                            attributes: ["id", "uom_name"],
-                        },
-                        {
-                            model: WorkCategory,
-                            as: "workCategory",
-                            attributes: ["id", "work_category_name"],
-                        },
-                    ],
-                }
-            ],
+            include: poIncludes,
             offset,
-            limit: Number(limit),
-            order: [["createdAt", "DESC"]],
+            limit,
+            order: orderClause,
         });
 
         res.status(StatusCodes.OK).json({
@@ -473,9 +620,9 @@ const PurchaseOrderController = {
             result: purchaseOrders,
             pagination: {
                 total,
-                page: Number(page),
-                limit: Number(limit),
-                totalPages: Math.ceil(total / Number(limit)),
+                page,
+                limit,
+                totalPages: Math.ceil(total / limit),
             },
         });
     }),
@@ -700,9 +847,10 @@ const PurchaseOrderController = {
                 throw new Error("Purchase order not found");
             }
 
-            if (String(existingPurchaseOrder.status || "").toUpperCase() !== "DRAFT") {
+            const currentStatus = String(existingPurchaseOrder.status || "").toUpperCase();
+            if (currentStatus !== "PENDING_APPROVAL" && currentStatus !== "DRAFT") {
                 res.status(StatusCodes.BAD_REQUEST);
-                throw new Error("Cannot update Purchase Order. Only DRAFT Purchase Orders can be updated.");
+                throw new Error("Cannot update Purchase Order. Only Purchase Orders in 'Pending Approval' status can be edited.");
             }
 
             let vendor_address_id = normalizeOptionalId(header.vendor_address_id ?? header.vendorAddressId);
@@ -777,7 +925,7 @@ const PurchaseOrderController = {
                 billing_address,
                 class_id: normalizeOptionalId(header.class_id),
                 department_id: normalizeOptionalId(header.department_id),
-                status: normalizePurchaseOrderStatus(header.status || existingPurchaseOrder.status, existingPurchaseOrder.status || "DRAFT"),
+                status: normalizePurchaseOrderStatus(header.status || existingPurchaseOrder.status, existingPurchaseOrder.status || "PENDING_APPROVAL"),
                 isActive: header.isActive !== undefined ? Boolean(header.isActive) : existingPurchaseOrder.isActive,
                 remarks: header.remarks || null,
                 CompanyId,
@@ -909,6 +1057,10 @@ const PurchaseOrderController = {
                 updatedLineItems.push(createdLine);
             }
 
+            if (headerPayload.status === "APPROVED") {
+                await InventoryService.syncPurchaseOrderStatus(existingPurchaseOrder.id, CompanyId, transaction);
+            }
+
             await transaction.commit();
 
             res.status(StatusCodes.OK).json({
@@ -949,9 +1101,25 @@ const PurchaseOrderController = {
         }
 
         const updatePayload: any = {};
+        let targetStatus: string | null = null;
+
         if (status) {
-            updatePayload.status = normalizePurchaseOrderStatus(status);
+            const currentStatus = normalizePurchaseOrderStatus(purchaseOrder.status, "PENDING_APPROVAL");
+            if (currentStatus !== "PENDING_APPROVAL") {
+                res.status(StatusCodes.BAD_REQUEST);
+                throw new Error("Cannot change status. Once a Purchase Order is approved, its status cannot be manually changed.");
+            }
+
+            targetStatus = normalizePurchaseOrderStatus(status);
+            const allowedManualStatuses = ["PENDING_APPROVAL", "APPROVED", "REJECTED"];
+            if (!allowedManualStatuses.includes(targetStatus)) {
+                res.status(StatusCodes.BAD_REQUEST);
+                throw new Error(`Invalid status '${status}'. Manual status updates can only be set to 'Pending Approval', 'Approved', or 'Rejected'.`);
+            }
+
+            updatePayload.status = targetStatus;
         }
+
         if (isActive !== undefined) {
             updatePayload.isActive = Boolean(isActive);
         }
@@ -962,6 +1130,12 @@ const PurchaseOrderController = {
         }
 
         await purchaseOrder.update(updatePayload);
+
+        // If updated to APPROVED, trigger sync to evaluate any existing downstream transactions
+        if (targetStatus === "APPROVED") {
+            await InventoryService.syncPurchaseOrderStatus(purchaseOrder.id, CompanyId);
+            await purchaseOrder.reload();
+        }
 
         res.status(StatusCodes.OK).json({
             success: true,
@@ -1103,316 +1277,466 @@ const PurchaseOrderController = {
         });
     }),
 
-    // Export purchase orders to CSV based on filters
+    // Export purchase orders and line items to CSV based on filters
     exportPurchaseOrdersCSV: asyncHandler(async (req: CustomRequest, res: Response) => {
         const company = await findCompanyForUser(req.user);
         const CompanyId = company?.id;
-        const {
-            fromDate,
-            toDate,
-            status,
-            work_category_id,
-            warehouse_id,
-            city_id,
-        } = req.query;
+        const user_id = req.user?.id;
 
-        if (!CompanyId) {
+        if (!CompanyId || !user_id) {
             res.status(StatusCodes.UNAUTHORIZED);
             throw new Error("User authentication required");
         }
 
-        let whereClause: any = { CompanyId };
+        const search = typeof req.query.search === "string" ? req.query.search.trim() : "";
 
-        // Helper function to convert DD/MM/YYYY to YYYY-MM-DD
-        const convertDateFormat = (dateStr: string): string => {
-            if (dateStr.includes("/")) {
-                const parts = dateStr.split("/");
-                if (parts.length === 3) {
-                    // DD/MM/YYYY to YYYY-MM-DD
-                    return `${parts[2]}-${parts[1].padStart(2, "0")}-${parts[0].padStart(2, "0")}`;
-                }
-            }
-            return dateStr; // Return as-is if already in correct format
+        const whereClause: any = {
+            CompanyId,
         };
 
-        // Add date range filter using DATE() function for comparison
-        if (fromDate || toDate) {
-            if (fromDate && toDate) {
-                // Both dates provided - use BETWEEN on DATE part
-                const formattedFromDate = convertDateFormat(fromDate as string);
-                const formattedToDate = convertDateFormat(toDate as string);
-                whereClause[Op.and] = [
-                    sequelize.where(
-                        sequelize.fn("DATE", sequelize.col("PurchaseOrder.purchaseDate")),
-                        {
-                            [Op.between]: [formattedFromDate, formattedToDate],
-                        }
-                    ),
-                ];
-            } else if (fromDate) {
-                // Only from date - greater than or equal
-                const formattedFromDate = convertDateFormat(fromDate as string);
-                whereClause[Op.and] = [
-                    sequelize.where(
-                        sequelize.fn("DATE", sequelize.col("PurchaseOrder.purchaseDate")),
-                        {
-                            [Op.gte]: formattedFromDate,
-                        }
-                    ),
-                ];
-            } else if (toDate) {
-                // Only to date - less than or equal
-                const formattedToDate = convertDateFormat(toDate as string);
-                whereClause[Op.and] = [
-                    sequelize.where(
-                        sequelize.fn("DATE", sequelize.col("PurchaseOrder.purchaseDate")),
-                        {
-                            [Op.lte]: formattedToDate,
-                        }
-                    ),
-                ];
+        // Active / Inactive filter
+        if (req.query.isActive !== undefined && req.query.isActive !== "" && req.query.isActive !== "all") {
+            whereClause.isActive = String(req.query.isActive).toLowerCase() === "true";
+        } else if (req.query.showInactives !== undefined && req.query.showInactives !== "") {
+            const showInactivesBool = String(req.query.showInactives).toLowerCase() === "true";
+            if (!showInactivesBool) {
+                whereClause.isActive = true;
             }
         }
 
-        // Add status filter
-        if (status) {
-            whereClause.status = status;
+        // Status filter
+        if (req.query.status && req.query.status !== "" && req.query.status !== "ALL") {
+            const statusVal = String(req.query.status).trim();
+            if (statusVal === "PENDING_APPROVAL" || statusVal === "DRAFT") {
+                whereClause.status = { [Op.in]: ["PENDING_APPROVAL", "DRAFT"] };
+            } else if (statusVal === "PARTIALLY_RECEIVED" || statusVal === "PARTIAL_RECEIVED") {
+                whereClause.status = { [Op.in]: ["PARTIALLY_RECEIVED", "PARTIAL_RECEIVED"] };
+            } else if (statusVal === "CLOSED" || statusVal === "COMPLETED") {
+                whereClause.status = { [Op.in]: ["CLOSED", "COMPLETED"] };
+            } else {
+                whereClause.status = statusVal;
+            }
         }
 
-        // Additional filters
-        if (warehouse_id) {
-            whereClause.warehouse_id = warehouse_id;
+        // Vendor filter
+        const vendorId = req.query.vendorId || req.query.vendor_id;
+        if (vendorId && vendorId !== "" && vendorId !== "ALL") {
+            whereClause.vendor_id = Number(vendorId);
         }
 
-        if (city_id) {
-            whereClause.city_id = city_id;
+        // Subsidiary filter
+        const subsidiaryId = req.query.subsidiaryId || req.query.subsidiary_id;
+        if (subsidiaryId && subsidiaryId !== "" && subsidiaryId !== "ALL") {
+            whereClause.subsidiary_id = Number(subsidiaryId);
         }
 
+        // Department filter
+        const departmentId = req.query.departmentId || req.query.department_id;
+        if (departmentId && departmentId !== "" && departmentId !== "ALL") {
+            whereClause.department_id = Number(departmentId);
+        }
 
-        const lineWhere: any = {};
-        if (work_category_id) lineWhere.work_category_id = work_category_id;
-        if (warehouse_id) lineWhere.warehouse_id = warehouse_id;
+        // Class filter
+        const classId = req.query.classId || req.query.class_id;
+        if (classId && classId !== "" && classId !== "ALL") {
+            whereClause.class_id = Number(classId);
+        }
 
-        const includeArr: any[] = [
-            {
-                model: Customer,
-                as: "customer",
-                attributes: ["id", "name", "contact", "email"],
-            },
+        // Warehouse filter
+        const warehouseId = req.query.warehouseId || req.query.warehouse_id;
+        if (warehouseId && warehouseId !== "" && warehouseId !== "ALL") {
+            whereClause.warehouse_id = Number(warehouseId);
+        }
+
+        // City / Location filter
+        const cityId = req.query.cityId || req.query.city_id;
+        if (cityId && cityId !== "" && cityId !== "ALL") {
+            whereClause.city_id = Number(cityId);
+        }
+
+        // Date range filter on purchaseDate
+        const fromDate = req.query.startDate || req.query.fromDate || req.query.start_date;
+        const toDate = req.query.endDate || req.query.toDate || req.query.end_date;
+        if (fromDate && toDate) {
+            const start = new Date(fromDate as string);
+            start.setHours(0, 0, 0, 0);
+            const end = new Date(toDate as string);
+            end.setHours(23, 59, 59, 999);
+            whereClause.purchaseDate = {
+                [Op.between]: [start, end],
+            };
+        } else if (fromDate) {
+            const start = new Date(fromDate as string);
+            start.setHours(0, 0, 0, 0);
+            whereClause.purchaseDate = {
+                [Op.gte]: start,
+            };
+        } else if (toDate) {
+            const end = new Date(toDate as string);
+            end.setHours(23, 59, 59, 999);
+            whereClause.purchaseDate = {
+                [Op.lte]: end,
+            };
+        }
+
+        // Search condition
+        if (search) {
+            const matchingVendors = await Vendor.findAll({
+                where: {
+                    company_id: CompanyId,
+                    [Op.or]: [
+                        { company_name: { [Op.like]: `%${search}%` } },
+                        { first_name: { [Op.like]: `%${search}%` } },
+                        { last_name: { [Op.like]: `%${search}%` } },
+                    ],
+                },
+                attributes: ["id"],
+            });
+            const vendorIds = matchingVendors.map((v: any) => v.id);
+
+            const searchConditions: any[] = [
+                { purchaseNo: { [Op.like]: `%${search}%` } },
+                { work_order_no: { [Op.like]: `%${search}%` } },
+                { remarks: { [Op.like]: `%${search}%` } },
+            ];
+
+            if (vendorIds.length > 0) {
+                searchConditions.push({ vendor_id: { [Op.in]: vendorIds } });
+            }
+
+            if (!isNaN(Number(search))) {
+                searchConditions.push({ id: Number(search) });
+            }
+
+            whereClause[Op.or] = searchConditions;
+        }
+
+        // Sort configuration
+        const sortBy = typeof req.query.sortBy === "string" ? req.query.sortBy : "createdAt";
+        const sortOrder = String(req.query.sortOrder || "DESC").toUpperCase() === "ASC" ? "ASC" : "DESC";
+
+        const sortFieldMap: { [key: string]: any } = {
+            id: [["id", sortOrder]],
+            purchaseNo: [["purchaseNo", sortOrder]],
+            purchaseDate: [["purchaseDate", sortOrder]],
+            deliveryDate: [["deliveryDate", sortOrder]],
+            status: [["status", sortOrder]],
+            createdAt: [["createdAt", sortOrder]],
+            updatedAt: [["updatedAt", sortOrder]],
+        };
+
+        const orderClause = sortFieldMap[sortBy] || [["createdAt", "DESC"]];
+
+        const poIncludes = [
             {
                 model: CityMaster,
                 as: "city",
                 attributes: ["id", "city_name"],
+                required: false,
             },
             {
-                model: TransportationMode,
-                as: "transportationMode",
-                attributes: ["id", "mode_name"],
+                model: Vendor,
+                as: "vendor",
+                attributes: ["id", "entity_id", "company_name", "first_name", "last_name", "salutation", "email", "phone"],
+                include: [
+                    { association: "addressBook", include: ["city", "state"] },
+                    { association: "currency" }
+                ],
+                required: false,
             },
             {
-                model: Warehouse,
-                as: "warehouse",
-                attributes: ["id", "warehouse_name"],
+                model: CurrencyMaster,
+                as: "currency",
+                attributes: ["id", "currency_name", "currency_code", "currency_symbol"],
+                required: false,
+            },
+            {
+                model: VendorAddressBook,
+                as: "vendorAddress",
+                include: ["city", "state"],
+                required: false,
             },
             {
                 model: SubsidiaryMaster,
                 as: "subsidiary",
                 attributes: ["id", "subsidiary_name"],
+                required: false,
             },
-        ];
-
-        if (Object.keys(lineWhere).length > 0) {
-            includeArr.push({
+            {
+                model: ClassMaster,
+                as: "class",
+                required: false,
+            },
+            {
+                model: DepartmentMaster,
+                as: "department",
+                required: false,
+            },
+            {
+                model: User,
+                as: "user",
+                attributes: ["id", "FirstName", "LastName", "Email"],
+                required: false,
+            },
+            {
                 model: PurchaseOrderLine,
                 as: "purchaseOrderLines",
-                where: lineWhere,
-                required: true,
+                required: false,
                 include: [
                     {
                         model: ItemMaster,
                         as: "item",
                         attributes: ["id", "item_code", "item_name", "item_desc"],
                     },
-                    { model: HSNSACMaster, as: "hsnSac", attributes: ["id", "code", "taxPercentage"] },
-                    { model: UOMMaster, as: "uom", attributes: ["id", "uom_name"] },
+                    {
+                        model: HSNSACMaster,
+                        as: "hsnSac",
+                        attributes: ["id", "code"],
+                    },
+                    {
+                        model: UOMMaster,
+                        as: "uom",
+                        attributes: ["id", "uom_name"],
+                    },
                     {
                         model: WorkCategory,
                         as: "workCategory",
                         attributes: ["id", "work_category_name"],
                     },
-                    {
-                        model: Warehouse,
-                        as: "warehouse",
-                        attributes: ["id", "warehouse_name"],
-                    },
                 ],
-            });
-        } else {
-            includeArr.push({
-                model: PurchaseOrderLine,
-                as: "purchaseOrderLines",
-                include: [
-                    {
-                        model: ItemMaster,
-                        as: "item",
-                        attributes: ["id", "item_code", "item_name", "item_desc"],
-                    },
-                    { model: HSNSACMaster, as: "hsnSac", attributes: ["id", "code", "taxPercentage"] },
-                    { model: UOMMaster, as: "uom", attributes: ["id", "uom_name"] },
-                ],
-            });
-        }
+            }
+        ];
 
         const purchaseOrders = await PurchaseOrder.findAll({
             where: whereClause,
-            include: includeArr,
-            order: [["createdAt", "DESC"]],
+            include: poIncludes,
+            order: orderClause,
         });
 
-        // Prepare CSV data
-        const csvData: any[] = [];
+        // Helper function for human-readable status labels
+        const getStatusText = (status?: string | null): string => {
+            const s = String(status || "").toUpperCase().replace(/\s+/g, "_");
+            switch (s) {
+                case "PENDING_APPROVAL":
+                case "DRAFT":
+                    return "Pending Approval";
+                case "APPROVED":
+                    return "Approved";
+                case "REJECTED":
+                    return "Rejected";
+                case "PENDING_RECEIPT":
+                    return "Pending Receipt";
+                case "PARTIALLY_RECEIVED":
+                case "PARTIAL_RECEIVED":
+                    return "Partially Received";
+                case "RECEIVED":
+                    return "Received";
+                case "PENDING_BILLING":
+                    return "Pending Billing";
+                case "PARTIALLY_BILLED":
+                case "PARTIAL_BILLED":
+                    return "Partially Billed";
+                case "FULLY_BILLED":
+                    return "Fully Billed";
+                case "CLOSED":
+                case "COMPLETED":
+                    return "Closed";
+                case "CANCELLED":
+                    return "Cancelled";
+                default:
+                    return status ? String(status).replace(/_/g, " ") : "Pending Approval";
+            }
+        };
 
-        purchaseOrders.forEach((purchaseOrder: any) => {
-            const poLines = purchaseOrder.purchaseOrderLines || purchaseOrder.lineItems || [];
+        const formatDateVal = (dateVal: any) => {
+            if (!dateVal) return "";
+            try {
+                return new Date(dateVal).toISOString().split("T")[0];
+            } catch {
+                return String(dateVal);
+            }
+        };
+
+        const csvRows: any[] = [];
+
+        purchaseOrders.forEach((po: any) => {
+            const poLines = po.purchaseOrderLines || po.line_items || po.lineItems || [];
+            
+            const vendorCode = po.vendor?.entity_id || "";
+            const vendorName = po.vendor?.company_name ||
+                [po.vendor?.salutation, po.vendor?.first_name, po.vendor?.last_name].filter(Boolean).join(" ") ||
+                (po.vendor_id ? `Vendor #${po.vendor_id}` : "");
+
+            const currencyName = po.currency?.currency_name || po.currency?.currency_code || po.vendor?.currency?.currency_code || "INR";
+            const billingAddressStr = po.billing_address || formatAddressBookRecord(po.vendorAddress) || "";
+            const createdByName = [po.user?.FirstName, po.user?.LastName].filter(Boolean).join(" ") || po.user?.Email || "";
+
+            const poSubtotal = poLines.reduce((acc: number, l: any) => acc + Number(l.subtotal || l.amount || (Number(l.rate || 0) * Number(l.quantity || 0))), 0);
+            const poDiscountTotal = poLines.reduce((acc: number, l: any) => acc + Number(l.discount_amount || 0), 0);
+            const poTaxTotal = poLines.reduce((acc: number, l: any) => acc + Number(l.tax_amount || 0), 0);
+            const poTotalAmount = poLines.reduce((acc: number, l: any) => acc + Number(l.line_total || 0), 0);
+
             if (poLines.length > 0) {
-                poLines.forEach((lineItem: any) => {
-                    csvData.push({
-                        "Purchase Order Number": purchaseOrder.purchaseNo || "",
-                        "Work Order No": purchaseOrder.work_order_no || "",
-                        "Customer Name": purchaseOrder.customer?.name || "",
-                        "Customer Contact": purchaseOrder.customer?.contact || "",
-                        City: purchaseOrder.city?.city_name || "",
-                        "Transportation Mode": purchaseOrder.transportationMode?.mode_name || "",
-                        "Vehicle No": purchaseOrder.vehicleNumber || "",
-                        "Transporter Name": purchaseOrder.transporterName || "",
-                        "Driver Name": purchaseOrder.driverName || "",
-                        "Driver Phone": purchaseOrder.driverPhone || "",
-                        Warehouse: purchaseOrder.warehouse?.warehouse_name || "",
-                        Subsidiary: purchaseOrder.subsidiary?.subsidiary_name || "",
-                        "Purchase Date": purchaseOrder.purchaseDate
-                            ? new Date(purchaseOrder.purchaseDate).toLocaleDateString()
-                            : "",
-                        "Delivery Date": purchaseOrder.deliveryDate
-                            ? new Date(purchaseOrder.deliveryDate).toLocaleDateString()
-                            : "",
-                        Status: purchaseOrder.status || "",
-                        "Item Code": lineItem.item?.item_code || "",
-                        "Item Name": lineItem.item?.item_name || "",
-                        "Item Description": lineItem.item?.item_desc || "",
-                        "HSN/SAC Code": lineItem.hsnSac?.code || "",
-                        "Lot Number": lineItem.lot_number || "",
-                        Quantity: lineItem.quantity || 0,
-                        UOM: lineItem.uom?.uom_name || "",
-                        Rate: lineItem.rate || 0,
-                        "Tax Rate %": lineItem.tax_rate || 0,
-                        "Tax Amount": lineItem.tax_amount || 0,
-                        "Line Total": lineItem.line_total || 0,
-                        "Work Category": lineItem.workCategory?.work_category_name || "",
-                        "Line Warehouse": lineItem.warehouse?.warehouse_name || "",
-                        Remarks: purchaseOrder.remarks || "",
-                        "Created Date": purchaseOrder.createdAt
-                            ? new Date(purchaseOrder.createdAt).toLocaleDateString()
-                            : "",
+                poLines.forEach((line: any, idx: number) => {
+                    csvRows.push({
+                        "PO Internal ID": po.id,
+                        "PO #": po.purchaseNo || "",
+                        "Date": formatDateVal(po.purchaseDate),
+                        "Receive By Date": formatDateVal(po.deliveryDate),
+                        "Status": getStatusText(po.status),
+                        "Vendor Code": vendorCode,
+                        "Vendor Name": vendorName,
+                        "Vendor Email": po.vendor?.email || "",
+                        "Vendor Phone": po.vendor?.phone || "",
+                        "Subsidiary": po.subsidiary?.subsidiary_name || "",
+                        "Location": po.city?.city_name || "",
+                        "Class": po.class?.class_name || po.class?.name || "",
+                        "Department": po.department?.department_name || po.department?.name || "",
+                        "Currency": currencyName,
+                        "Billing Address": billingAddressStr,
+                        "Active": po.isActive !== false ? "Active" : "Inactive",
+                        "PO Total Lines": poLines.length,
+                        "PO Subtotal": poSubtotal.toFixed(2),
+                        "PO Discount Total": poDiscountTotal.toFixed(2),
+                        "PO Tax Total": poTaxTotal.toFixed(2),
+                        "PO Total Amount": poTotalAmount.toFixed(2),
+                        "Header Remarks": po.remarks || "",
+                        "Created By": createdByName,
+                        "Created Date": formatDateVal(po.createdAt),
+                        "Last Updated Date": formatDateVal(po.updatedAt),
+                        // Line item columns
+                        "Line #": idx + 1,
+                        "Item Code": line.item?.item_code || "",
+                        "Item Name": line.item?.item_name || "",
+                        "Item Description": line.item?.item_desc || "",
+                        "Quantity": Number(line.quantity || 0),
+                        "UOM": line.uom?.uom_name || "",
+                        "Rate": Number(line.rate || 0).toFixed(2),
+                        "Amount": Number(line.amount || 0).toFixed(2),
+                        "Discount %": Number(line.discount_percent || 0),
+                        "Discount Amount": Number(line.discount_amount || 0).toFixed(2),
+                        "Subtotal": Number(line.subtotal || 0).toFixed(2),
+                        "Tax Rate %": Number(line.tax_rate || 0),
+                        "Tax Amount": Number(line.tax_amount || 0).toFixed(2),
+                        "Line Total": Number(line.line_total || 0).toFixed(2),
+                        "HSN/SAC Code": line.hsnSac?.code || "",
+                        "Tax Nature": line.indian_tax_nature || "",
+                        "Work Category": line.workCategory?.work_category_name || "",
+                        "Lot Number": line.lot_number || "",
+                        "Line Status": line.status || "",
+                        "Line Remarks": line.remarks || "",
                     });
                 });
             } else {
-                // Add header-only row if no line items
-                csvData.push({
-                    "Purchase Order Number": purchaseOrder.purchaseNo || "",
-                    "Work Order No": purchaseOrder.work_order_no || "",
-                    "Customer Name": purchaseOrder.customer?.name || "",
-                    "Customer Contact": purchaseOrder.customer?.contact || "",
-                    City: purchaseOrder.city?.city_name || "",
-                    "Transportation Mode": purchaseOrder.transportationMode?.mode_name || "",
-                    "Vehicle No": purchaseOrder.vehicleNumber || "",
-                    "Transporter Name": purchaseOrder.transporterName || "",
-                    "Driver Name": purchaseOrder.driverName || "",
-                    "Driver Phone": purchaseOrder.driverPhone || "",
-                    Warehouse: purchaseOrder.warehouse?.warehouse_name || "",
-                    Subsidiary: purchaseOrder.subsidiary?.subsidiary_name || "",
-                    "Purchase Date": purchaseOrder.purchaseDate
-                        ? new Date(purchaseOrder.purchaseDate).toLocaleDateString()
-                        : "",
-                    "Delivery Date": purchaseOrder.deliveryDate
-                        ? new Date(purchaseOrder.deliveryDate).toLocaleDateString()
-                        : "",
-                    Status: purchaseOrder.status || "",
+                csvRows.push({
+                    "PO Internal ID": po.id,
+                    "PO #": po.purchaseNo || "",
+                    "Date": formatDateVal(po.purchaseDate),
+                    "Receive By Date": formatDateVal(po.deliveryDate),
+                    "Status": getStatusText(po.status),
+                    "Vendor Code": vendorCode,
+                    "Vendor Name": vendorName,
+                    "Vendor Email": po.vendor?.email || "",
+                    "Vendor Phone": po.vendor?.phone || "",
+                    "Subsidiary": po.subsidiary?.subsidiary_name || "",
+                    "Location": po.city?.city_name || "",
+                    "Class": po.class?.class_name || po.class?.name || "",
+                    "Department": po.department?.department_name || po.department?.name || "",
+                    "Currency": currencyName,
+                    "Billing Address": billingAddressStr,
+                    "Active": po.isActive !== false ? "Active" : "Inactive",
+                    "PO Total Lines": 0,
+                    "PO Subtotal": "0.00",
+                    "PO Discount Total": "0.00",
+                    "PO Tax Total": "0.00",
+                    "PO Total Amount": "0.00",
+                    "Header Remarks": po.remarks || "",
+                    "Created By": createdByName,
+                    "Created Date": formatDateVal(po.createdAt),
+                    "Last Updated Date": formatDateVal(po.updatedAt),
+                    // Line item columns (empty)
+                    "Line #": "",
                     "Item Code": "",
                     "Item Name": "",
                     "Item Description": "",
+                    "Quantity": "",
+                    "UOM": "",
+                    "Rate": "",
+                    "Amount": "",
+                    "Discount %": "",
+                    "Discount Amount": "",
+                    "Subtotal": "",
+                    "Tax Rate %": "",
+                    "Tax Amount": "",
+                    "Line Total": "",
                     "HSN/SAC Code": "",
-                    "Lot Number": "",
-                    Quantity: 0,
-                    UOM: "",
-                    Rate: 0,
-                    "Tax Rate %": 0,
-                    "Tax Amount": 0,
-                    "Line Total": 0,
+                    "Tax Nature": "",
                     "Work Category": "",
-                    "Line Warehouse": "",
-                    Remarks: purchaseOrder.remarks || "",
-                    "Created Date": purchaseOrder.createdAt
-                        ? new Date(purchaseOrder.createdAt).toLocaleDateString()
-                        : "",
+                    "Lot Number": "",
+                    "Line Status": "",
+                    "Line Remarks": "",
                 });
             }
         });
 
-        // Convert to CSV format
-        if (csvData.length === 0) {
-            // Return empty CSV with headers only
-            const headers = [
-                "Purchase Order Number",
-                "Work Order No",
-                "Customer Name",
-                "Customer Contact",
-                "City",
-                "Transportation Mode",
-                "Vehicle No",
-                "Transporter Name",
-                "Driver Name",
-                "Driver Phone",
-                "Warehouse",
-                "Subsidiary",
-                "Purchase Date",
-                "Delivery Date",
-                "Status",
-                "Item Code",
-                "Item Name",
-                "Item Description",
-                "HSN/SAC Code",
-                "Lot Number",
-                "Quantity",
-                "UOM",
-                "Rate",
-                "Tax Rate %",
-                "Tax Amount",
-                "Line Total",
-                "Work Category",
-                "Line Warehouse",
-                "Remarks",
-                "Created Date",
-            ];
+        const defaultHeaders = [
+            "PO Internal ID",
+            "PO #",
+            "Date",
+            "Receive By Date",
+            "Status",
+            "Vendor Code",
+            "Vendor Name",
+            "Vendor Email",
+            "Vendor Phone",
+            "Subsidiary",
+            "Location",
+            "Class",
+            "Department",
+            "Currency",
+            "Billing Address",
+            "Active",
+            "PO Total Lines",
+            "PO Subtotal",
+            "PO Discount Total",
+            "PO Tax Total",
+            "PO Total Amount",
+            "Header Remarks",
+            "Created By",
+            "Created Date",
+            "Last Updated Date",
+            "Line #",
+            "Item Code",
+            "Item Name",
+            "Item Description",
+            "Quantity",
+            "UOM",
+            "Rate",
+            "Amount",
+            "Discount %",
+            "Discount Amount",
+            "Subtotal",
+            "Tax Rate %",
+            "Tax Amount",
+            "Line Total",
+            "HSN/SAC Code",
+            "Tax Nature",
+            "Work Category",
+            "Lot Number",
+            "Line Status",
+            "Line Remarks",
+        ];
 
-            const csvContent = headers.join(",") + "\n";
-            const filename = `purchase_orders_${new Date().toISOString().split("T")[0]}.csv`;
+        const headers = csvRows.length > 0 ? Object.keys(csvRows[0]) : defaultHeaders;
 
-            res.setHeader("Content-Type", "text/csv");
-            res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
-
-            res.status(StatusCodes.OK).send(csvContent);
-            return;
-        }
-
-        const headers = Object.keys(csvData[0]);
         const csvContent = [
             headers.join(","),
-            ...csvData.map((row) =>
+            ...csvRows.map((row) =>
                 headers
                     .map((header) => {
-                        const value = row[header];
-                        // Escape commas and quotes in CSV
-                        if (typeof value === "string" && (value.includes(",") || value.includes('"'))) {
+                        const value = row[header] !== undefined && row[header] !== null ? String(row[header]) : "";
+                        // Escape commas, quotes, and newlines in CSV
+                        if (value.includes(",") || value.includes('"') || value.includes("\n") || value.includes("\r")) {
                             return `"${value.replace(/"/g, '""')}"`;
                         }
                         return value;
@@ -1421,9 +1745,8 @@ const PurchaseOrderController = {
             ),
         ].join("\n");
 
-        // Set headers for file download
-        const filename = `purchase_orders_${new Date().toISOString().split("T")[0]}.csv`;
-        res.setHeader("Content-Type", "text/csv");
+        const filename = `purchase_orders_export_${new Date().toISOString().split("T")[0]}.csv`;
+        res.setHeader("Content-Type", "text/csv; charset=utf-8");
         res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
 
         res.status(StatusCodes.OK).send(csvContent);

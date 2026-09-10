@@ -6,6 +6,7 @@ const purchaseInvoiceRouter = express.Router();
 
 purchaseInvoiceRouter.post("/create", verifyToken, PurchaseInvoiceController.createPurchaseInvoice);
 purchaseInvoiceRouter.get("/get", verifyToken, PurchaseInvoiceController.getAllPurchaseInvoices);
+purchaseInvoiceRouter.get("/export-csv", verifyToken, PurchaseInvoiceController.exportPurchaseInvoicesCSV);
 purchaseInvoiceRouter.get("/:id", verifyToken, PurchaseInvoiceController.getPurchaseInvoiceById);
 purchaseInvoiceRouter.put("/:id", verifyToken, PurchaseInvoiceController.updatePurchaseInvoice);
 purchaseInvoiceRouter.patch("/:id/status", verifyToken, PurchaseInvoiceController.updatePurchaseInvoiceStatus);

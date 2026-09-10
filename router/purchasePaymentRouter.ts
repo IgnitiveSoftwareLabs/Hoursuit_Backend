@@ -6,6 +6,7 @@ const purchasePaymentRouter = express.Router();
 
 purchasePaymentRouter.post("/create", verifyToken, PurchasePaymentController.createPurchasePayment);
 purchasePaymentRouter.get("/get", verifyToken, PurchasePaymentController.getAllPurchasePayments);
+purchasePaymentRouter.get("/export-csv", verifyToken, PurchasePaymentController.exportPurchasePaymentsCSV);
 purchasePaymentRouter.get("/:id", verifyToken, PurchasePaymentController.getPurchasePaymentById);
 purchasePaymentRouter.put("/:id", verifyToken, PurchasePaymentController.updatePurchasePayment);
 purchasePaymentRouter.patch("/:id/status", verifyToken, PurchasePaymentController.updatePurchasePaymentStatus);

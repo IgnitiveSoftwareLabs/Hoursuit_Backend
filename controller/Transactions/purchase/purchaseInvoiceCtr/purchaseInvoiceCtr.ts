@@ -6,7 +6,7 @@ import { Op } from "sequelize";
 import { PurchaseInvoiceHeader, PurchaseInvoiceLine } from "../../../../modals/Transactions/purchase/purchaseInvoice";
 import { PurchaseOrder, PurchaseOrderLine } from "../../../../modals/Transactions/purchase/purchaseOrder";
 import VendorDetails from "../../../../modals/masters/vendorDetails/vendorDetails";
-import { normalizePurchaseInvoiceStatus } from "../../../../utils/p2pStatus";
+import { normalizePurchaseInvoiceStatus, isPurchaseInvoiceEditable, canManuallyUpdatePurchaseInvoiceStatus } from "../../../../utils/p2pStatus";
 import { findCompanyForUser } from "../../../../utils/findCompanyForUser";
 import ItemMaster from "../../../../modals/masters/items/itemMaster";
 import { GLImpactService } from "../../../../utils/glImpactService";
@@ -84,7 +84,7 @@ const PurchaseInvoiceController = {
             const invoiceDate = header.invoiceDate ? new Date(header.invoiceDate) : null;
             const dueDate = header.dueDate ? new Date(header.dueDate) : null;
 
-            const status = normalizePurchaseInvoiceStatus(header.status, "DRAFT");
+            const status = normalizePurchaseInvoiceStatus(header.status, "PENDING_APPROVAL");
 
             let invoiceNumber = String(header.invoiceNumber || header.vendorInvoiceNumber || "").trim();
             if (invoiceNumber) {
@@ -369,9 +369,24 @@ const PurchaseInvoiceController = {
 
             if (headerPayload.poHeaderId) {
                 const po = await PurchaseOrder.findOne({ where: { id: headerPayload.poHeaderId, CompanyId: companyId }, transaction });
-                if (po && po.isActive === false) {
-                    res.status(StatusCodes.BAD_REQUEST);
-                    throw new Error(`Cannot create Bill for Purchase Order ${po.purchaseNo || po.id} because it is deactivated/inactive.`);
+                if (po) {
+                    if (po.isActive === false) {
+                        res.status(StatusCodes.BAD_REQUEST);
+                        throw new Error(`Cannot create Bill for Purchase Order ${po.purchaseNo || po.id} because it is deactivated/inactive.`);
+                    }
+                    const poStatus = String(po.status || "").toUpperCase();
+                    if (poStatus === "PENDING_APPROVAL" || poStatus === "DRAFT") {
+                        res.status(StatusCodes.BAD_REQUEST);
+                        throw new Error(`Cannot create Bill for Purchase Order ${po.purchaseNo || po.id} because it is in Pending Approval status. Purchase Order must be approved first.`);
+                    }
+                    if (poStatus === "REJECTED") {
+                        res.status(StatusCodes.BAD_REQUEST);
+                        throw new Error(`Cannot create Bill for Purchase Order ${po.purchaseNo || po.id} because it is REJECTED.`);
+                    }
+                    if (poStatus === "CANCELLED") {
+                        res.status(StatusCodes.BAD_REQUEST);
+                        throw new Error(`Cannot create Bill for Purchase Order ${po.purchaseNo || po.id} because it is CANCELLED.`);
+                    }
                 }
             }
             if (headerPayload.grnHeaderId) {
@@ -419,7 +434,7 @@ const PurchaseInvoiceController = {
                 createdLineItems.push(createdLine);
             }
 
-            if (status === "POSTED") {
+            if (status === "APPROVED" || status === "POSTED") {
                 const parsedApAccountId = header.account_id ? Number(header.account_id) : undefined;
                 await GLImpactService.processPurchaseInvoicePosting(
                     createdHeader.id,
@@ -431,6 +446,20 @@ const PurchaseInvoiceController = {
                     undefined,
                     transaction
                 );
+            }
+
+            let poIdToSync: number | null = headerPayload.poHeaderId || null;
+            if (!poIdToSync && headerPayload.grnHeaderId) {
+                const grn = await GRN.findOne({ where: { id: headerPayload.grnHeaderId, CompanyId: companyId }, transaction });
+                if (grn?.purchaseOrderId) {
+                    poIdToSync = grn.purchaseOrderId;
+                }
+            }
+            if (poIdToSync) {
+                await InventoryService.syncPurchaseOrderStatus(poIdToSync, companyId, transaction);
+            }
+            if (headerPayload.grnHeaderId) {
+                await InventoryService.syncGRNStatus(headerPayload.grnHeaderId, companyId, transaction);
             }
 
             await transaction.commit();
@@ -459,61 +488,142 @@ const PurchaseInvoiceController = {
             throw new Error("User authentication required");
         }
 
-        const { page = 1, limit = 10, search, status } = req.query;
-        const offset = (Number(page) - 1) * Number(limit);
+        const page = Math.max(1, Number(req.query.page) || 1);
+        const limit = Math.max(1, Number(req.query.limit) || 10);
+        const offset = (page - 1) * limit;
+        const { search, status, vendorId, startDate, endDate } = req.query;
+        const option = String(req.query.option) === "true" || (req.query.option as any) === true;
+
         const whereClause: any = { companyId };
 
-        if (search) {
-            whereClause[Op.or] = [
-                { invoiceNumber: { [Op.like]: `%${search}%` } },
-                { vendorInvoiceNumber: { [Op.like]: `%${search}%` } },
-            ];
-        }
         if (status) {
             whereClause.status = status;
+        }
+
+        if (vendorId) {
+            whereClause.vendorId = Number(vendorId);
+        }
+
+        if (startDate && endDate) {
+            whereClause.invoiceDate = {
+                [Op.between]: [new Date(String(startDate)), new Date(String(endDate))]
+            };
+        } else if (startDate) {
+            whereClause.invoiceDate = { [Op.gte]: new Date(String(startDate)) };
+        } else if (endDate) {
+            whereClause.invoiceDate = { [Op.lte]: new Date(String(endDate)) };
+        }
+
+        if (search) {
+            const searchStr = String(search).trim();
+            const matchingVendors = await VendorDetails.findAll({
+                where: {
+                    company_id: companyId,
+                    [Op.or]: [
+                        { company_name: { [Op.like]: `%${searchStr}%` } },
+                        { first_name: { [Op.like]: `%${searchStr}%` } },
+                        { last_name: { [Op.like]: `%${searchStr}%` } },
+                    ]
+                },
+                attributes: ["id"]
+            });
+            const vIds = matchingVendors.map((v: any) => v.id);
+
+            const searchOr: any[] = [
+                { invoiceNumber: { [Op.like]: `%${searchStr}%` } },
+                { vendorInvoiceNumber: { [Op.like]: `%${searchStr}%` } },
+                { memo: { [Op.like]: `%${searchStr}%` } },
+                { remarks: { [Op.like]: `%${searchStr}%` } }
+            ];
+
+            if (vIds.length > 0) {
+                searchOr.push({ vendorId: { [Op.in]: vIds } });
+            }
+
+            if (!isNaN(Number(searchStr))) {
+                searchOr.push({ id: Number(searchStr) });
+            }
+
+            whereClause[Op.or] = searchOr;
+        }
+
+        const sortBy = typeof req.query.sortBy === "string" ? req.query.sortBy : "createdAt";
+        const sortOrder = String(req.query.sortOrder || "DESC").toUpperCase() === "ASC" ? "ASC" : "DESC";
+
+        const sortFieldMap: { [key: string]: any } = {
+            id: [["id", sortOrder]],
+            invoiceNumber: [["invoiceNumber", sortOrder]],
+            vendorInvoiceNumber: [["vendorInvoiceNumber", sortOrder]],
+            invoiceDate: [["invoiceDate", sortOrder]],
+            dueDate: [["dueDate", sortOrder]],
+            totalAmount: [["totalAmount", sortOrder]],
+            status: [["status", sortOrder]],
+            createdAt: [["createdAt", sortOrder]],
+            updatedAt: [["updatedAt", sortOrder]],
+        };
+
+        const orderClause = sortFieldMap[sortBy] || [["createdAt", "DESC"]];
+
+        const includeConfig = [
+            {
+                model: PurchaseOrder,
+                as: "purchaseOrder",
+                attributes: ["id", "purchaseNo"],
+                required: false,
+            },
+            {
+                model: GRN,
+                as: "grn",
+                attributes: ["id", "grnNo", "purchaseOrderId"],
+                required: false,
+                include: [
+                    {
+                        model: PurchaseOrder,
+                        as: "purchaseOrder",
+                        attributes: ["id", "purchaseNo"],
+                        required: false,
+                    },
+                ],
+            },
+            {
+                model: VendorDetails,
+                as: "vendor",
+                attributes: ["id", "company_name", "first_name", "last_name"],
+                required: false,
+            },
+            {
+                model: PurchaseInvoiceLine,
+                as: "purchaseInvoiceLines",
+                required: false,
+                include: [getItemIncludeConfig()],
+            },
+        ];
+
+        if (option) {
+            const invoices = await PurchaseInvoiceHeader.findAll({
+                where: whereClause,
+                subQuery: false,
+                include: includeConfig,
+                order: orderClause,
+            });
+
+            res.status(StatusCodes.OK).json({
+                success: true,
+                message: "Purchase invoices fetched successfully",
+                result: invoices,
+                total: invoices.length,
+            });
+            return;
         }
 
         const total = await PurchaseInvoiceHeader.count({ where: whereClause });
         const invoices = await PurchaseInvoiceHeader.findAll({
             where: whereClause,
             subQuery: false,
-            include: [
-                {
-                    model: PurchaseOrder,
-                    as: "purchaseOrder",
-                    attributes: ["id", "purchaseNo"],
-                    required: false,
-                },
-                {
-                    model: GRN,
-                    as: "grn",
-                    attributes: ["id", "grnNo", "purchaseOrderId"],
-                    required: false,
-                    include: [
-                        {
-                            model: PurchaseOrder,
-                            as: "purchaseOrder",
-                            attributes: ["id", "purchaseNo"],
-                            required: false,
-                        },
-                    ],
-                },
-                {
-                    model: VendorDetails,
-                    as: "vendor",
-                    attributes: ["id", "company_name"],
-                    required: false,
-                },
-                {
-                    model: PurchaseInvoiceLine,
-                    as: "purchaseInvoiceLines",
-                    required: false,
-                    include: [getItemIncludeConfig()],
-                },
-            ],
+            include: includeConfig,
             offset,
-            limit: Number(limit),
-            order: [["createdAt", "DESC"]],
+            limit,
+            order: orderClause,
         });
 
         res.status(StatusCodes.OK).json({
@@ -522,11 +632,171 @@ const PurchaseInvoiceController = {
             result: invoices,
             pagination: {
                 total,
-                page: Number(page),
-                limit: Number(limit),
-                totalPages: Math.ceil(total / Number(limit)),
+                page,
+                limit,
+                totalPages: Math.ceil(total / limit),
             },
         });
+    }),
+
+    exportPurchaseInvoicesCSV: asyncHandler(async (req: CustomRequest, res: Response) => {
+        const company = await findCompanyForUser(req.user);
+        const companyId = company?.id;
+        const user_id = req.user?.id;
+
+        if (!companyId || !user_id) {
+            res.status(StatusCodes.UNAUTHORIZED);
+            throw new Error("User authentication required");
+        }
+
+        const { search, status, vendorId, startDate, endDate } = req.query;
+        const whereClause: any = { companyId };
+
+        if (status) whereClause.status = status;
+        if (vendorId) whereClause.vendorId = Number(vendorId);
+
+        if (startDate && endDate) {
+            whereClause.invoiceDate = {
+                [Op.between]: [new Date(String(startDate)), new Date(String(endDate))]
+            };
+        } else if (startDate) {
+            whereClause.invoiceDate = { [Op.gte]: new Date(String(startDate)) };
+        } else if (endDate) {
+            whereClause.invoiceDate = { [Op.lte]: new Date(String(endDate)) };
+        }
+
+        if (search) {
+            const searchStr = String(search).trim();
+            whereClause[Op.or] = [
+                { invoiceNumber: { [Op.like]: `%${searchStr}%` } },
+                { vendorInvoiceNumber: { [Op.like]: `%${searchStr}%` } },
+                { memo: { [Op.like]: `%${searchStr}%` } },
+                { remarks: { [Op.like]: `%${searchStr}%` } }
+            ];
+        }
+
+        const invoices = await PurchaseInvoiceHeader.findAll({
+            where: whereClause,
+            include: [
+                { model: PurchaseOrder, as: "purchaseOrder", attributes: ["id", "purchaseNo"] },
+                { model: GRN, as: "grn", attributes: ["id", "grnNo"] },
+                { model: VendorDetails, as: "vendor" },
+                {
+                    model: PurchaseInvoiceLine,
+                    as: "purchaseInvoiceLines",
+                    include: [getItemIncludeConfig()]
+                }
+            ],
+            order: [["createdAt", "DESC"]]
+        });
+
+        const formatDateVal = (date: any) => (date ? new Date(date).toISOString().split("T")[0] : "");
+
+        const csvRows: any[] = [];
+        invoices.forEach((inv: any) => {
+            const vendorName = inv.vendor?.company_name || [inv.vendor?.first_name, inv.vendor?.last_name].filter(Boolean).join(" ") || "";
+            const lines = inv.purchaseInvoiceLines || [];
+
+            if (lines.length > 0) {
+                lines.forEach((line: any, idx: number) => {
+                    const item = line.item || {};
+                    csvRows.push({
+                        "Bill Internal ID": inv.id,
+                        "Bill #": inv.invoiceNumber || "",
+                        "Vendor Bill #": inv.vendorInvoiceNumber || "",
+                        "Bill Date": formatDateVal(inv.invoiceDate),
+                        "Due Date": formatDateVal(inv.dueDate),
+                        "Posting Period": inv.postingPeriod || "",
+                        "Status": inv.status || "",
+                        "Vendor Name": vendorName,
+                        "PO Reference #": inv.purchaseOrder?.purchaseNo || "",
+                        "GRN Reference #": inv.grn?.grnNo || "",
+                        "Subtotal": Number(inv.subtotal || 0).toFixed(2),
+                        "Discount Total": Number(inv.discountAmount || 0).toFixed(2),
+                        "Tax Total": Number(inv.taxAmount || 0).toFixed(2),
+                        "Total Amount": Number(inv.totalAmount || 0).toFixed(2),
+                        "Paid Amount": Number(inv.paidAmount || 0).toFixed(2),
+                        "Balance Due": Number(inv.balanceAmount !== null && inv.balanceAmount !== undefined ? inv.balanceAmount : (Number(inv.totalAmount || 0) - Number(inv.paidAmount || 0))).toFixed(2),
+                        "Memo": inv.memo || inv.remarks || "",
+                        "Created Date": formatDateVal(inv.createdAt),
+                        "Line #": idx + 1,
+                        "Item Code": item.item_code || "",
+                        "Item Name": item.item_name || "",
+                        "Item Description": line.itemDescription || item.description || "",
+                        "Quantity": line.quantity || "",
+                        "Rate": Number(line.unitPrice || 0).toFixed(2),
+                        "Amount": Number(line.amount || 0).toFixed(2),
+                        "Discount %": line.discountPercent || "0",
+                        "Discount Amount": Number(line.discountAmount || 0).toFixed(2),
+                        "Tax %": line.taxPercent || "0",
+                        "Tax Amount": Number(line.taxAmount || 0).toFixed(2),
+                        "Line Total": Number(line.totalAmount || 0).toFixed(2),
+                        "Line Remarks": line.remarks || ""
+                    });
+                });
+            } else {
+                csvRows.push({
+                    "Bill Internal ID": inv.id,
+                    "Bill #": inv.invoiceNumber || "",
+                    "Vendor Bill #": inv.vendorInvoiceNumber || "",
+                    "Bill Date": formatDateVal(inv.invoiceDate),
+                    "Due Date": formatDateVal(inv.dueDate),
+                    "Posting Period": inv.postingPeriod || "",
+                    "Status": inv.status || "",
+                    "Vendor Name": vendorName,
+                    "PO Reference #": inv.purchaseOrder?.purchaseNo || "",
+                    "GRN Reference #": inv.grn?.grnNo || "",
+                    "Subtotal": Number(inv.subtotal || 0).toFixed(2),
+                    "Discount Total": Number(inv.discountAmount || 0).toFixed(2),
+                    "Tax Total": Number(inv.taxAmount || 0).toFixed(2),
+                    "Total Amount": Number(inv.totalAmount || 0).toFixed(2),
+                    "Paid Amount": Number(inv.paidAmount || 0).toFixed(2),
+                    "Balance Due": Number(inv.balanceAmount !== null && inv.balanceAmount !== undefined ? inv.balanceAmount : (Number(inv.totalAmount || 0) - Number(inv.paidAmount || 0))).toFixed(2),
+                    "Memo": inv.memo || inv.remarks || "",
+                    "Created Date": formatDateVal(inv.createdAt),
+                    "Line #": "",
+                    "Item Code": "",
+                    "Item Name": "",
+                    "Item Description": "",
+                    "Quantity": "",
+                    "Rate": "",
+                    "Amount": "",
+                    "Discount %": "",
+                    "Discount Amount": "",
+                    "Tax %": "",
+                    "Tax Amount": "",
+                    "Line Total": "",
+                    "Line Remarks": ""
+                });
+            }
+        });
+
+        const defaultHeaders = [
+            "Bill Internal ID", "Bill #", "Vendor Bill #", "Bill Date", "Due Date", "Posting Period", "Status",
+            "Vendor Name", "PO Reference #", "GRN Reference #", "Subtotal", "Discount Total", "Tax Total",
+            "Total Amount", "Paid Amount", "Balance Due", "Memo", "Created Date",
+            "Line #", "Item Code", "Item Name", "Item Description", "Quantity", "Rate", "Amount",
+            "Discount %", "Discount Amount", "Tax %", "Tax Amount", "Line Total", "Line Remarks"
+        ];
+
+        const headers = csvRows.length > 0 ? Object.keys(csvRows[0]) : defaultHeaders;
+        const csvContent = [
+            headers.join(","),
+            ...csvRows.map((row) =>
+                headers.map((h) => {
+                    const val = row[h] !== undefined && row[h] !== null ? String(row[h]) : "";
+                    if (val.includes(",") || val.includes('"') || val.includes("\n") || val.includes("\r")) {
+                        return `"${val.replace(/"/g, '""')}"`;
+                    }
+                    return val;
+                }).join(",")
+            )
+        ].join("\n");
+
+        const filename = `vendor_bills_export_${new Date().toISOString().split("T")[0]}.csv`;
+        res.setHeader("Content-Type", "text/csv; charset=utf-8");
+        res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+        res.status(StatusCodes.OK).send(csvContent);
     }),
 
     getPurchaseInvoiceById: asyncHandler(async (req: CustomRequest, res: Response) => {
@@ -629,14 +899,14 @@ const PurchaseInvoiceController = {
                 throw new Error("Purchase invoice not found");
             }
 
-            if (String(existingInvoice.status || "").toUpperCase() !== "DRAFT") {
+            if (!isPurchaseInvoiceEditable(existingInvoice.status)) {
                 res.status(StatusCodes.BAD_REQUEST);
-                throw new Error("Cannot update Purchase Invoice. Only DRAFT Purchase Invoices can be updated.");
+                throw new Error("Cannot update Purchase Invoice. Only Purchase Invoices in PENDING_APPROVAL or RESUBMIT status can be updated.");
             }
 
             const invoiceDate = header.invoiceDate ? new Date(header.invoiceDate) : existingInvoice.invoiceDate;
             const dueDate = header.dueDate !== undefined ? (header.dueDate ? new Date(header.dueDate) : null) : existingInvoice.dueDate;
-            const status = normalizePurchaseInvoiceStatus(header.status || existingInvoice.status, existingInvoice.status || "DRAFT");
+            const status = normalizePurchaseInvoiceStatus(header.status || existingInvoice.status, existingInvoice.status || "PENDING_APPROVAL");
 
             const headerPayload: any = {
                 invoiceNumber: String(header.invoiceNumber || existingInvoice.invoiceNumber).trim(),
@@ -857,7 +1127,7 @@ const PurchaseInvoiceController = {
                 balanceAmount,
             }, { transaction });
 
-            if (status === "POSTED") {
+            if ((status === "APPROVED" || status === "POSTED") && existingInvoice.status !== "APPROVED" && existingInvoice.status !== "POSTED") {
                 const parsedApAccountId = header.account_id ? Number(header.account_id) : undefined;
                 await GLImpactService.processPurchaseInvoicePosting(
                     existingInvoice.id,
@@ -869,6 +1139,20 @@ const PurchaseInvoiceController = {
                     undefined,
                     transaction
                 );
+            }
+
+            let poIdToSync: number | null = targetPoId || null;
+            if (!poIdToSync && targetGrnId) {
+                const grn = await GRN.findOne({ where: { id: targetGrnId, CompanyId: companyId }, transaction });
+                if (grn?.purchaseOrderId) {
+                    poIdToSync = grn.purchaseOrderId;
+                }
+            }
+            if (poIdToSync) {
+                await InventoryService.syncPurchaseOrderStatus(poIdToSync, companyId, transaction);
+            }
+            if (targetGrnId) {
+                await InventoryService.syncGRNStatus(targetGrnId, companyId, transaction);
             }
 
             await transaction.commit();
@@ -944,8 +1228,7 @@ const PurchaseInvoiceController = {
             }
         }
 
-        const previousStatus = invoice.status;
-        const normalizedStatusUpdate = normalizePurchaseInvoiceStatus(status);
+        const previousStatus = normalizePurchaseInvoiceStatus(invoice.status);
 
         // Idempotency check: if status unchanged, return early
         if (previousStatus === normalizedStatus) {
@@ -958,9 +1241,9 @@ const PurchaseInvoiceController = {
         }
 
         // Prevent double posting
-        if (previousStatus === "POSTED" && normalizedStatus === "POSTED") {
+        if ((previousStatus === "APPROVED" || previousStatus === "POSTED") && (normalizedStatus === "APPROVED" || normalizedStatus === "POSTED")) {
             res.status(StatusCodes.BAD_REQUEST);
-            throw new Error("Purchase invoice is already POSTED");
+            throw new Error("Purchase invoice is already APPROVED");
         }
 
         const parseOptionalId = (val: unknown) => (val !== undefined && val !== null && val !== "" ? Number(val) : undefined);
@@ -973,11 +1256,11 @@ const PurchaseInvoiceController = {
         // Managed transaction for status update & GL posting
         await sequelize.transaction(async (t) => {
             await invoice.update({
-                status: normalizedStatus as "DRAFT" | "POSTED" | "PARTIAL_PAID" | "PAID" | "CANCELLED"
+                status: normalizedStatus as any
             }, { transaction: t });
 
-            // Post to GL when invoice is marked POSTED
-            if (normalizedStatus === "POSTED") {
+            // Post to GL when invoice is marked APPROVED or POSTED
+            if ((normalizedStatus === "APPROVED" || normalizedStatus === "POSTED") && previousStatus !== "APPROVED" && previousStatus !== "POSTED") {
                 await GLImpactService.processPurchaseInvoicePosting(
                     invoice.id,
                     companyId,
@@ -988,6 +1271,20 @@ const PurchaseInvoiceController = {
                     parsedTaxAccountId,
                     t
                 );
+            }
+
+            let poIdToSync: number | null = invoice.poHeaderId || null;
+            if (!poIdToSync && invoice.grnHeaderId) {
+                const grn = await GRN.findOne({ where: { id: invoice.grnHeaderId, CompanyId: companyId }, transaction: t });
+                if (grn?.purchaseOrderId) {
+                    poIdToSync = grn.purchaseOrderId;
+                }
+            }
+            if (poIdToSync) {
+                await InventoryService.syncPurchaseOrderStatus(poIdToSync, companyId, t);
+            }
+            if (invoice.grnHeaderId) {
+                await InventoryService.syncGRNStatus(invoice.grnHeaderId, companyId, t);
             }
         });
 
@@ -1020,8 +1317,24 @@ const PurchaseInvoiceController = {
             throw new Error("Cannot delete Purchase Invoice. Only DRAFT Purchase Invoices can be deleted.");
         }
 
+        let poIdToSync: number | null = invoice.poHeaderId || null;
+        const grnIdToSync: number | null = invoice.grnHeaderId || null;
+        if (!poIdToSync && invoice.grnHeaderId) {
+            const grn = await GRN.findOne({ where: { id: invoice.grnHeaderId, CompanyId: companyId } });
+            if (grn?.purchaseOrderId) {
+                poIdToSync = grn.purchaseOrderId;
+            }
+        }
+
         await PurchaseInvoiceLine.destroy({ where: { invoiceHeaderId: invoice.id } });
         await invoice.destroy();
+
+        if (poIdToSync) {
+            await InventoryService.syncPurchaseOrderStatus(poIdToSync, companyId);
+        }
+        if (grnIdToSync) {
+            await InventoryService.syncGRNStatus(grnIdToSync, companyId);
+        }
 
         res.status(StatusCodes.OK).json({
             success: true,

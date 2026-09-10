@@ -1,6 +1,6 @@
 import { Model, DataTypes, Optional } from "sequelize";
 import Joi from "joi";
-// import { PurchaseInvoiceLine } from "../../../master/";
+
 import VendorDetails from "../../../masters/vendorDetails/vendorDetails";
 import PurchaseOrder from "../purchaseOrder/purchaseOrderHeader";
 import PurchaseInvoiceLine from "./purchaseInvoiceLine";
@@ -25,12 +25,21 @@ interface PurchaseInvoiceHeaderAttributes {
     subtotal: number;
     taxAmount: number;
     discountAmount: number;
-    // freightAmount: number;
-    // otherCharges: number;
     totalAmount: number;
     paidAmount: number;
     balanceAmount: number;
-    status: "DRAFT" | "POSTED" | "PARTIAL_PAID" | "PAID" | "CANCELLED";
+    status:
+        | "PENDING_APPROVAL"
+        | "APPROVED"
+        | "UNPAID"
+        | "PARTIAL_PAID"
+        | "PARTIALLY_PAID"
+        | "PAID"
+        | "RESUBMIT"
+        | "REJECTED"
+        | "CANCELLED"
+        | "DRAFT"
+        | "POSTED";
     user_id: number;
     remarks?: string | null;
     createdAt?: Date;
@@ -86,12 +95,21 @@ class PurchaseInvoiceHeader
     public subtotal!: number;
     public taxAmount!: number;
     public discountAmount!: number;
-    // public freightAmount!: number;
-    // public otherCharges!: number;
     public totalAmount!: number;
     public paidAmount!: number;
     public balanceAmount!: number;
-    public status!: "DRAFT" | "POSTED" | "PARTIAL_PAID" | "PAID" | "CANCELLED";
+    public status!:
+        | "PENDING_APPROVAL"
+        | "APPROVED"
+        | "UNPAID"
+        | "PARTIAL_PAID"
+        | "PARTIALLY_PAID"
+        | "PAID"
+        | "RESUBMIT"
+        | "REJECTED"
+        | "CANCELLED"
+        | "DRAFT"
+        | "POSTED";
     public user_id!: number;
     public remarks!: string | null;
     public readonly createdAt!: Date;
@@ -171,11 +189,6 @@ PurchaseInvoiceHeader.init(
             allowNull: false,
             defaultValue: "INR",
         },
-        // exchangeRate: {
-        //     type: DataTypes.DECIMAL(18, 6),
-        //     allowNull: false,
-        //     defaultValue: 1,
-        // },
         subtotal: {
             type: DataTypes.DECIMAL(18, 2),
             allowNull: false,
@@ -191,16 +204,6 @@ PurchaseInvoiceHeader.init(
             allowNull: false,
             defaultValue: 0,
         },
-        // freightAmount: {
-        //     type: DataTypes.DECIMAL(18, 2),
-        //     allowNull: false,
-        //     defaultValue: 0,
-        // },
-        // otherCharges: {
-        //     type: DataTypes.DECIMAL(18, 2),
-        //     allowNull: false,
-        //     defaultValue: 0,
-        // },
         totalAmount: {
             type: DataTypes.DECIMAL(18, 2),
             allowNull: false,
@@ -216,14 +219,20 @@ PurchaseInvoiceHeader.init(
         },
         status: {
             type: DataTypes.ENUM(
-                "DRAFT",
-                "POSTED",
+                "PENDING_APPROVAL",
+                "APPROVED",
+                "UNPAID",
                 "PARTIAL_PAID",
+                "PARTIALLY_PAID",
                 "PAID",
-                "CANCELLED"
+                "RESUBMIT",
+                "REJECTED",
+                "CANCELLED",
+                "DRAFT",
+                "POSTED"
             ),
             allowNull: false,
-            defaultValue: "DRAFT",
+            defaultValue: "PENDING_APPROVAL",
         },
         remarks: {
             type: DataTypes.TEXT,
@@ -299,12 +308,6 @@ VendorDetails.hasMany(PurchaseInvoiceHeader, {
     onDelete: "CASCADE",
 });
 
-// Header -> Lines
-// PurchaseInvoiceHeader.hasMany(PurchaseInvoiceLine, {
-//     foreignKey: "invoiceHeaderId",
-//     as: "purchaseInvoiceLines",
-//     onDelete: "CASCADE",
-// });
 PurchaseInvoiceLine.belongsTo(PurchaseInvoiceHeader, {
     foreignKey: "invoiceHeaderId",
     as: "invoiceHeader",

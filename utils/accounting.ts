@@ -9,6 +9,9 @@ export interface GLLineInput {
     debit_amount: number;
     credit_amount: number;
     narration?: string;
+    vendor_id?: number | null;
+    customer_id?: number | null;
+    employee_id?: number | null;
 }
 
 export interface PostDocumentDTO {
@@ -22,6 +25,9 @@ export interface PostDocumentDTO {
     referenceNo?: string;         // Maps to reference_no (e.g. GRN No, Inv No)
     narration?: string;           // Maps to header narration
     entryDate: Date;              // Maps to entry_date
+    vendorId?: number | null;     // Maps to vendor_id
+    customerId?: number | null;   // Maps to customer_id
+    employeeId?: number | null;   // Maps to employee_id
     lines: GLLineInput[];
 }
 
@@ -117,6 +123,9 @@ export const AccountingService = {
             referenceNo,
             narration,
             entryDate,
+            vendorId,
+            customerId,
+            employeeId,
             lines,
         } = dto;
 
@@ -147,13 +156,16 @@ export const AccountingService = {
         });
 
         if (header) {
-            // Update existing header totals and date
+            // Update existing header totals, date, and entity references
             await header.update(
                 {
                     entry_date: entryDate,
                     voucher_type_id: resolvedVoucherTypeId,
                     reference_no: referenceNo,
                     narration: narration,
+                    vendor_id: vendorId ?? header.vendor_id ?? null,
+                    customer_id: customerId ?? header.customer_id ?? null,
+                    employee_id: employeeId ?? header.employee_id ?? null,
                     total_debit: totalDebit,
                     total_credit: totalCredit,
                     status: "DRAFT",
@@ -187,6 +199,9 @@ export const AccountingService = {
                     narration: narration,
                     source_id: sourceId ?? 1,
                     source_name: sourceName ?? "GRN",
+                    vendor_id: vendorId ?? null,
+                    customer_id: customerId ?? null,
+                    employee_id: employeeId ?? null,
                     status: "DRAFT",
                     total_debit: totalDebit,
                     total_credit: totalCredit,
@@ -198,7 +213,7 @@ export const AccountingService = {
             );
         }
 
-        // 3. Create Lines matching the schema
+        // 3. Create Lines matching the schema with entity references
         const journalLines: JournalEntryLine[] = [];
         for (const line of lines) {
             const createdLine = await JournalEntryLine.create(
@@ -208,6 +223,9 @@ export const AccountingService = {
                     narration: line.narration || narration,
                     debit_amount: line.debit_amount,
                     credit_amount: line.credit_amount,
+                    vendor_id: line.vendor_id !== undefined ? line.vendor_id : (vendorId ?? null),
+                    customer_id: line.customer_id !== undefined ? line.customer_id : (customerId ?? null),
+                    employee_id: line.employee_id !== undefined ? line.employee_id : (employeeId ?? null),
                     CompanyId: companyId,
                     user_id: userId,
                     isActive: true,

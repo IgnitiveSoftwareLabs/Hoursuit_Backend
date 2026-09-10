@@ -43,6 +43,7 @@ import PurchaseOrderLine from "../modals/Transactions/purchase/purchaseOrder/pur
 import { GRN, GRNLine } from "../modals/Transactions/purchase/GRN";
 import ItemMaster from "../modals/masters/items/itemMaster";
 import ChartOfAccountMaster from "../modals/masters/chartOfAccount/chartOfAccount";
+import { normalizeGRNStatus } from "./p2pStatus";
 import VendorDetails from "../modals/masters/vendorDetails/vendorDetails";
 
 /**
@@ -593,8 +594,22 @@ export const GLImpactService = {
     grniAccountId?: number,
     transaction?: Transaction
   ) => {
-    const grn = await GRN.findByPk(grnId, { transaction });
+    const grn = await GRN.findByPk(grnId, {
+      include: [
+        {
+          association: "purchaseOrder",
+          attributes: ["id", "vendor_id"]
+        }
+      ],
+      transaction
+    });
     if (!grn) throw new Error(`GRN record #${grnId} not found`);
+
+    const rawStatus = String((grn as any).status || "").toUpperCase();
+    const normStatus = normalizeGRNStatus((grn as any).status);
+    if (rawStatus === "PENDING_RECEIPT" || rawStatus === "DRAFT" || normStatus === "PENDING_RECEIPT" || normStatus === "DRAFT") {
+      return null;
+    }
 
     const lines = await GLImpactService.calculateGRNImpact(
       source_name,
@@ -608,6 +623,7 @@ export const GLImpactService = {
 
     const grnNo = (grn as any).grnNo || `GRN-${grn.id}`;
     const grnDate = (grn as any).grnDate ? new Date((grn as any).grnDate) : new Date();
+    const vendorId = (grn as any).purchaseOrder?.vendor_id || (grn as any).vendor_id || null;
 
     return await AccountingService.createAndPostJournalEntry(
       {
@@ -620,6 +636,7 @@ export const GLImpactService = {
         referenceNo: grnNo,
         narration: `GL Impact posting for GRN #${grnNo}`,
         entryDate: grnDate,
+        vendorId,
         lines
       },
       transaction
@@ -846,6 +863,7 @@ export const GLImpactService = {
 
     const invoiceNo = invoice.invoiceNumber || `INV-${invoice.id}`;
     const invoiceDate = invoice.invoiceDate ? new Date(invoice.invoiceDate) : new Date();
+    const vendorId = (invoice as any).vendor_id || (invoice as any).vendorId || null;
 
     return await AccountingService.createAndPostJournalEntry(
       {
@@ -858,6 +876,7 @@ export const GLImpactService = {
         referenceNo: invoiceNo,
         narration: `GL Impact posting for Purchase Invoice #${invoiceNo}`,
         entryDate: invoiceDate,
+        vendorId,
         lines
       },
       transaction
@@ -985,6 +1004,7 @@ export const GLImpactService = {
 
     const paymentNo = payment.paymentNumber || `PAY-${payment.id}`;
     const paymentDate = payment.paymentDate ? new Date(payment.paymentDate) : new Date();
+    const vendorId = (payment as any).vendor_id || (payment as any).vendorId || null;
 
     return await AccountingService.createAndPostJournalEntry(
       {
@@ -997,6 +1017,7 @@ export const GLImpactService = {
         referenceNo: paymentNo,
         narration: `GL Impact posting for Purchase Payment #${paymentNo}`,
         entryDate: paymentDate,
+        vendorId,
         lines
       },
       transaction
@@ -1115,7 +1136,15 @@ export const GLImpactService = {
     clearingAccountId?: number,
     transaction?: Transaction
   ) => {
-    const fulfillment = await PurchaseReturnFulfillmentHeader.findByPk(fulfillmentId, { transaction });
+    const fulfillment = await PurchaseReturnFulfillmentHeader.findByPk(fulfillmentId, {
+      include: [
+        {
+          association: "purchaseReturnHeader",
+          attributes: ["id", "vendorId"]
+        }
+      ],
+      transaction
+    });
     if (!fulfillment) throw new Error(`Purchase Return Fulfillment #${fulfillmentId} not found`);
 
     const lines = await GLImpactService.calculatePurchaseReturnFulfillmentImpact(
@@ -1129,6 +1158,7 @@ export const GLImpactService = {
 
     const fNo = fulfillment.fulfillmentNumber || `PRF-${fulfillment.id}`;
     const fDate = fulfillment.fulfillmentDate ? new Date(fulfillment.fulfillmentDate) : new Date();
+    const vendorId = fulfillment.vendorId || (fulfillment as any).purchaseReturnHeader?.vendorId || (fulfillment as any).vendor_id || null;
 
     return await AccountingService.createAndPostJournalEntry(
       {
@@ -1141,6 +1171,7 @@ export const GLImpactService = {
         referenceNo: fNo,
         narration: `GL Impact posting for Purchase Return Fulfillment #${fNo}`,
         entryDate: fDate,
+        vendorId,
         lines
       },
       transaction
@@ -1267,6 +1298,7 @@ export const GLImpactService = {
 
     const creditNo = credit.creditNoteNumber || `VC-${credit.id}`;
     const creditDate = credit.creditDate ? new Date(credit.creditDate) : new Date();
+    const vendorId = (credit as any).vendor_id || (credit as any).vendorId || null;
 
     return await AccountingService.createAndPostJournalEntry(
       {
@@ -1279,6 +1311,7 @@ export const GLImpactService = {
         referenceNo: creditNo,
         narration: `GL Impact posting for Vendor Credit #${creditNo}`,
         entryDate: creditDate,
+        vendorId,
         lines
       },
       transaction
@@ -1386,6 +1419,7 @@ export const GLImpactService = {
 
     const refundNo = refund.refundNumber || `VR-${refund.id}`;
     const refundDate = refund.refundDate ? new Date(refund.refundDate) : new Date();
+    const vendorId = (refund as any).vendor_id || (refund as any).vendorId || null;
 
     return await AccountingService.createAndPostJournalEntry(
       {
@@ -1398,6 +1432,7 @@ export const GLImpactService = {
         referenceNo: refundNo,
         narration: `GL Impact posting for Vendor Refund #${refundNo}`,
         entryDate: refundDate,
+        vendorId,
         lines,
       },
       transaction

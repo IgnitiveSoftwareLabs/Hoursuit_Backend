@@ -7,6 +7,8 @@ const grnRouter = express.Router();
 
 grnRouter.post("/create", verifyToken, GRNController.createGRN);
 grnRouter.get("/get", verifyToken, GRNController.getAllGRN);
+grnRouter.get("/export-csv", verifyToken, GRNController.exportGRNCSV);
+grnRouter.get("/export/csv", verifyToken, GRNController.exportGRNCSV);
 grnRouter.get("/:id", verifyToken, GRNController.getGRNById);
 grnRouter.put("/:id", verifyToken, GRNController.updateGRN);
 grnRouter.patch("/:id/status", verifyToken, GRNController.updateStatusOfGRN);

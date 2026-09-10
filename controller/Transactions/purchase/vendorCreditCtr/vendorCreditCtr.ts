@@ -21,6 +21,7 @@ import CityMaster from "../../../../modals/masters/city/city";
 import VendorDetails from "../../../../modals/masters/vendorDetails/vendorDetails";
 import { GLImpactService } from "../../../../utils/glImpactService";
 import { generateSequentialDocNumber } from "../../../../utils/documentNumberHelper";
+import { normalizeVendorCreditStatus, isVendorCreditEditable, normalizePurchaseReturnStatus } from "../../../../utils/p2pStatus";
 
 export const VendorCreditController = {
     createVendorCredit: asyncHandler(async (req: CustomRequest, res: Response) => {
@@ -243,6 +244,8 @@ export const VendorCreditController = {
                 }
             }
 
+            const initialStatus = normalizeVendorCreditStatus(header.status, "APPROVED");
+
             const vendorCreditHeader = await VendorCreditHeader.create({
                 companyId,
                 creditNoteNumber,
@@ -255,7 +258,7 @@ export const VendorCreditController = {
                 discountAmount: Number(finalDiscount.toFixed(2)),
                 taxAmount: Number(finalTax.toFixed(2)),
                 totalAmount: Number(finalTotal.toFixed(2)),
-                status: "POSTED",
+                status: initialStatus,
                 remarks: header.remarks || null,
                 user_id
             }, { transaction });
@@ -337,8 +340,10 @@ export const VendorCreditController = {
                 }
 
                 if (totalAppliedOnCreate > 0) {
+                    const finalStatus = totalAppliedOnCreate >= finalTotal ? "FULLY_APPLIED" : "PARTIALLY_APPLIED";
                     await vendorCreditHeader.update({
                         appliedAmount: totalAppliedOnCreate,
+                        status: finalStatus,
                     }, { transaction });
                 }
             }
@@ -372,7 +377,9 @@ export const VendorCreditController = {
                     }
 
                     if (totalCredited >= totalAuthorized && totalAuthorized > 0) {
-                        await parentReturn.update({ status: "RETURNED" }, { transaction });
+                        await parentReturn.update({ status: "CREDITED" }, { transaction });
+                    } else if (totalCredited > 0) {
+                        await parentReturn.update({ status: "PENDING_CREDIT_PARTIALLY_RETURNED" }, { transaction });
                     }
                 }
             }
@@ -404,41 +411,104 @@ export const VendorCreditController = {
             throw new Error("User authentication required");
         }
 
-        const { page = 1, limit = 10, vendorId, returnHeaderId } = req.query;
-        const offset = (Number(page) - 1) * Number(limit);
+        const page = Math.max(1, Number(req.query.page) || 1);
+        const limit = Math.max(1, Number(req.query.limit) || 10);
+        const offset = (page - 1) * limit;
+        const { search, status, vendorId, returnHeaderId, startDate, endDate } = req.query;
+        const option = String(req.query.option) === "true" || (req.query.option as any) === true;
+
         const whereClause: any = { companyId };
 
-        if (vendorId) whereClause.vendorId = Number(vendorId);
-        if (returnHeaderId) whereClause.purchaseReturnHeaderId = Number(returnHeaderId);
+        if (status) {
+            whereClause.status = status;
+        }
 
-        const total = await VendorCreditHeader.count({ where: whereClause });
-        const credits = await VendorCreditHeader.findAll({
-            where: whereClause,
-            include: [
-                { model: VendorDetails, as: "vendor", attributes: ["id", "company_name"] },
-                { model: PurchaseReturnHeader, as: "purchaseReturnHeader", attributes: ["id", "returnNumber"] },
-                {
-                    model: VendorCreditLine,
-                    as: "creditLines",
-                    include: [
-                        { model: ItemMaster, as: "item", attributes: ["id", "item_code", "item_name"] },
-                        { model: CityMaster, as: "location", attributes: ["id", "city_name"] }
+        if (vendorId) {
+            whereClause.vendorId = Number(vendorId);
+        }
+
+        if (returnHeaderId) {
+            whereClause.purchaseReturnHeaderId = Number(returnHeaderId);
+        }
+
+        if (startDate && endDate) {
+            whereClause.creditDate = {
+                [Op.between]: [new Date(String(startDate)), new Date(String(endDate))]
+            };
+        } else if (startDate) {
+            whereClause.creditDate = { [Op.gte]: new Date(String(startDate)) };
+        } else if (endDate) {
+            whereClause.creditDate = { [Op.lte]: new Date(String(endDate)) };
+        }
+
+        if (search) {
+            const searchStr = String(search).trim();
+            const matchingVendors = await VendorDetails.findAll({
+                where: {
+                    company_id: companyId,
+                    [Op.or]: [
+                        { company_name: { [Op.like]: `%${searchStr}%` } },
+                        { first_name: { [Op.like]: `%${searchStr}%` } },
+                        { last_name: { [Op.like]: `%${searchStr}%` } },
                     ]
                 },
-                {
-                    model: VendorCreditBillApply,
-                    as: "billApplies",
-                    required: false,
-                },
-            ],
-            offset,
-            limit: Number(limit),
-            order: [["createdAt", "DESC"]]
-        });
+                attributes: ["id"]
+            });
+            const vIds = matchingVendors.map((v: any) => v.id);
 
-        const formattedCredits = credits.map((c: any) => {
+            const searchOr: any[] = [
+                { creditNoteNumber: { [Op.like]: `%${searchStr}%` } },
+                { remarks: { [Op.like]: `%${searchStr}%` } }
+            ];
+
+            if (vIds.length > 0) {
+                searchOr.push({ vendorId: { [Op.in]: vIds } });
+            }
+
+            if (!isNaN(Number(searchStr))) {
+                searchOr.push({ id: Number(searchStr) });
+                searchOr.push({ purchaseReturnHeaderId: Number(searchStr) });
+            }
+
+            whereClause[Op.or] = searchOr;
+        }
+
+        const sortBy = typeof req.query.sortBy === "string" ? req.query.sortBy : "createdAt";
+        const sortOrder = String(req.query.sortOrder || "DESC").toUpperCase() === "ASC" ? "ASC" : "DESC";
+
+        const sortFieldMap: { [key: string]: any } = {
+            id: [["id", sortOrder]],
+            creditNoteNumber: [["creditNoteNumber", sortOrder]],
+            creditDate: [["creditDate", sortOrder]],
+            totalAmount: [["totalAmount", sortOrder]],
+            status: [["status", sortOrder]],
+            createdAt: [["createdAt", sortOrder]],
+            updatedAt: [["updatedAt", sortOrder]],
+        };
+
+        const orderClause = sortFieldMap[sortBy] || [["createdAt", "DESC"]];
+
+        const includeConfig = [
+            { model: VendorDetails, as: "vendor", attributes: ["id", "company_name", "first_name", "last_name"] },
+            { model: PurchaseReturnHeader, as: "purchaseReturnHeader", attributes: ["id", "returnNumber"] },
+            {
+                model: VendorCreditLine,
+                as: "creditLines",
+                include: [
+                    { model: ItemMaster, as: "item", attributes: ["id", "item_code", "item_name"] },
+                    { model: CityMaster, as: "location", attributes: ["id", "city_name"] }
+                ]
+            },
+            {
+                model: VendorCreditBillApply,
+                as: "billApplies",
+                required: false,
+            },
+        ];
+
+        const formatRow = (c: any) => {
             const row = c.toJSON();
-            const vendorName = row.vendor?.company_name || "";
+            const vendorName = row.vendor?.company_name || [row.vendor?.first_name, row.vendor?.last_name].filter(Boolean).join(" ") || "";
             if (row.vendor) {
                 row.vendor.vendor_name = vendorName;
             }
@@ -452,19 +522,203 @@ export const VendorCreditController = {
             row.refundedAmount = refunded;
             row.availableCredit = Math.max(0, Number((total - (applied + refunded)).toFixed(2)));
             return row;
+        };
+
+        if (option) {
+            const credits = await VendorCreditHeader.findAll({
+                where: whereClause,
+                include: includeConfig,
+                order: orderClause
+            });
+
+            res.status(StatusCodes.OK).json({
+                success: true,
+                message: "Vendor credits fetched successfully",
+                result: credits.map(formatRow),
+                total: credits.length
+            });
+            return;
+        }
+
+        const total = await VendorCreditHeader.count({ where: whereClause });
+        const credits = await VendorCreditHeader.findAll({
+            where: whereClause,
+            include: includeConfig,
+            offset,
+            limit,
+            order: orderClause
         });
 
         res.status(StatusCodes.OK).json({
             success: true,
             message: "Vendor credits fetched successfully",
-            result: formattedCredits,
+            result: credits.map(formatRow),
             pagination: {
                 total,
-                page: Number(page),
-                limit: Number(limit),
-                totalPages: Math.ceil(total / Number(limit))
+                page,
+                limit,
+                totalPages: Math.ceil(total / limit)
             }
         });
+    }),
+
+    exportVendorCreditsCSV: asyncHandler(async (req: CustomRequest, res: Response) => {
+        const company = await findCompanyForUser(req.user);
+        const companyId = company?.id;
+
+        if (!companyId) {
+            res.status(StatusCodes.UNAUTHORIZED);
+            throw new Error("User authentication required");
+        }
+
+        const { search, status, vendorId, returnHeaderId, startDate, endDate } = req.query;
+        const whereClause: any = { companyId };
+
+        if (status) whereClause.status = status;
+        if (vendorId) whereClause.vendorId = Number(vendorId);
+        if (returnHeaderId) whereClause.purchaseReturnHeaderId = Number(returnHeaderId);
+
+        if (startDate && endDate) {
+            whereClause.creditDate = {
+                [Op.between]: [new Date(String(startDate)), new Date(String(endDate))]
+            };
+        } else if (startDate) {
+            whereClause.creditDate = { [Op.gte]: new Date(String(startDate)) };
+        } else if (endDate) {
+            whereClause.creditDate = { [Op.lte]: new Date(String(endDate)) };
+        }
+
+        if (search) {
+            const searchStr = String(search).trim();
+            whereClause[Op.or] = [
+                { creditNoteNumber: { [Op.like]: `%${searchStr}%` } },
+                { remarks: { [Op.like]: `%${searchStr}%` } }
+            ];
+        }
+
+        const credits = await VendorCreditHeader.findAll({
+            where: whereClause,
+            include: [
+                { model: VendorDetails, as: "vendor" },
+                { model: PurchaseReturnHeader, as: "purchaseReturnHeader" },
+                {
+                    model: VendorCreditLine,
+                    as: "creditLines",
+                    include: [
+                        { model: ItemMaster, as: "item" },
+                        { model: CityMaster, as: "location" }
+                    ]
+                },
+                { model: VendorCreditBillApply, as: "billApplies", required: false }
+            ],
+            order: [["createdAt", "DESC"]]
+        });
+
+        const formatDateVal = (date: any) => (date ? new Date(date).toISOString().split("T")[0] : "");
+
+        const csvRows: any[] = [];
+        credits.forEach((c: any) => {
+            const vendorName = c.vendor?.company_name || [c.vendor?.first_name, c.vendor?.last_name].filter(Boolean).join(" ") || "";
+            const total = Number(c.totalAmount || 0);
+            const appliedFromApplies = (c.billApplies || []).reduce((sum: number, a: any) => sum + Number(a.appliedAmount || 0), 0);
+            const applied = Number(Math.max(appliedFromApplies, Number(c.appliedAmount || 0)).toFixed(2));
+            const refunded = Number(Number(c.refundedAmount || 0).toFixed(2));
+            const available = Math.max(0, Number((total - (applied + refunded)).toFixed(2)));
+
+            const lines = c.creditLines || [];
+
+            if (lines.length > 0) {
+                lines.forEach((l: any, idx: number) => {
+                    const item = l.item || {};
+                    csvRows.push({
+                        "Vendor Credit Internal ID": c.id,
+                        "Vendor Credit / Debit Note #": c.creditNoteNumber || "",
+                        "Credit Date": formatDateVal(c.creditDate),
+                        "Status": c.status || "",
+                        "Vendor Name": vendorName,
+                        "Return Authorization #": c.purchaseReturnHeader?.returnNumber || "",
+                        "Subtotal": Number(c.subtotal || 0).toFixed(2),
+                        "Discount Total": Number(c.discountAmount || 0).toFixed(2),
+                        "Tax Total": Number(c.taxAmount || 0).toFixed(2),
+                        "Total Amount": total.toFixed(2),
+                        "Applied Amount": applied.toFixed(2),
+                        "Refunded Amount": refunded.toFixed(2),
+                        "Available Credit Balance": available.toFixed(2),
+                        "Header Remarks": c.remarks || "",
+                        "Created Date": formatDateVal(c.createdAt),
+                        "Line #": idx + 1,
+                        "Item Code": item.item_code || "",
+                        "Item Name": item.item_name || "",
+                        "Quantity": l.creditQty || "",
+                        "Unit Price": Number(l.unitPrice || 0).toFixed(2),
+                        "Discount %": l.discountPercent || "0",
+                        "Discount Amount": Number(l.discountAmount || 0).toFixed(2),
+                        "Tax %": l.taxPercent || "0",
+                        "Tax Amount": Number(l.taxAmount || 0).toFixed(2),
+                        "Line Total": Number(l.totalAmount || 0).toFixed(2),
+                        "Location": l.location?.city_name || "",
+                        "Line Remarks": l.remarks || ""
+                    });
+                });
+            } else {
+                csvRows.push({
+                    "Vendor Credit Internal ID": c.id,
+                    "Vendor Credit / Debit Note #": c.creditNoteNumber || "",
+                    "Credit Date": formatDateVal(c.creditDate),
+                    "Status": c.status || "",
+                    "Vendor Name": vendorName,
+                    "Return Authorization #": c.purchaseReturnHeader?.returnNumber || "",
+                    "Subtotal": Number(c.subtotal || 0).toFixed(2),
+                    "Discount Total": Number(c.discountAmount || 0).toFixed(2),
+                    "Tax Total": Number(c.taxAmount || 0).toFixed(2),
+                    "Total Amount": total.toFixed(2),
+                    "Applied Amount": applied.toFixed(2),
+                    "Refunded Amount": refunded.toFixed(2),
+                    "Available Credit Balance": available.toFixed(2),
+                    "Header Remarks": c.remarks || "",
+                    "Created Date": formatDateVal(c.createdAt),
+                    "Line #": "",
+                    "Item Code": "",
+                    "Item Name": "",
+                    "Quantity": "",
+                    "Unit Price": "",
+                    "Discount %": "",
+                    "Discount Amount": "",
+                    "Tax %": "",
+                    "Tax Amount": "",
+                    "Line Total": "",
+                    "Location": "",
+                    "Line Remarks": ""
+                });
+            }
+        });
+
+        const defaultHeaders = [
+            "Vendor Credit Internal ID", "Vendor Credit / Debit Note #", "Credit Date", "Status", "Vendor Name",
+            "Return Authorization #", "Subtotal", "Discount Total", "Tax Total", "Total Amount", "Applied Amount",
+            "Refunded Amount", "Available Credit Balance", "Header Remarks", "Created Date",
+            "Line #", "Item Code", "Item Name", "Quantity", "Unit Price", "Discount %", "Discount Amount",
+            "Tax %", "Tax Amount", "Line Total", "Location", "Line Remarks"
+        ];
+
+        const headers = csvRows.length > 0 ? Object.keys(csvRows[0]) : defaultHeaders;
+        const csvContent = [
+            headers.join(","),
+            ...csvRows.map((row) =>
+                headers.map((h) => {
+                    const val = row[h] !== undefined && row[h] !== null ? String(row[h]) : "";
+                    if (val.includes(",") || val.includes('"') || val.includes("\n") || val.includes("\r")) {
+                        return `"${val.replace(/"/g, '""')}"`;
+                    }
+                    return val;
+                }).join(",")
+            )
+        ].join("\n");
+
+        const filename = `vendor_credits_export_${new Date().toISOString().split("T")[0]}.csv`;
+        res.setHeader("Content-Type", "text/csv; charset=utf-8");
+        res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+        res.status(StatusCodes.OK).send(csvContent);
     }),
 
     getVendorCreditById: asyncHandler(async (req: CustomRequest, res: Response) => {
@@ -544,7 +798,7 @@ export const VendorCreditController = {
             where: {
                 companyId,
                 vendorId: Number(vendorId),
-                status: { [Op.notIn]: ["DRAFT", "CANCELLED", "PAID"] },
+                status: { [Op.notIn]: ["DRAFT", "PENDING_APPROVAL", "RESUBMIT", "REJECTED", "CANCELLED", "PAID"] },
             },
             order: [["invoiceDate", "ASC"], ["id", "ASC"]],
         });
@@ -690,8 +944,10 @@ export const VendorCreditController = {
             }
 
             const newTotalApplied = Number((alreadyApplied + totalApplyingNow).toFixed(2));
+            const newStatus = (newTotalApplied + alreadyRefunded) >= (totalCreditAmount - 0.01) ? "FULLY_APPLIED" : "PARTIALLY_APPLIED";
             await vendorCredit.update({
                 appliedAmount: newTotalApplied,
+                status: newStatus,
             }, { transaction });
 
             await transaction.commit();
@@ -985,9 +1241,9 @@ export const VendorCreditController = {
             throw new Error(`Vendor Credit #${id} not found`);
         }
 
-        if (String(vendorCredit.status).toUpperCase() !== "DRAFT") {
+        if (!isVendorCreditEditable(vendorCredit.status)) {
             res.status(StatusCodes.BAD_REQUEST);
-            throw new Error(`Cannot edit Vendor Credit with status "${vendorCredit.status}". Once approved/posted from DRAFT, records cannot be modified.`);
+            throw new Error(`Cannot edit Vendor Credit with status "${vendorCredit.status}". Once approved/applied, records cannot be modified.`);
         }
 
         let header = req.body.header || req.body;
@@ -995,8 +1251,8 @@ export const VendorCreditController = {
 
         if (header.remarks !== undefined) vendorCredit.remarks = header.remarks;
         else if (header.reason !== undefined) vendorCredit.remarks = header.reason;
-        if (header.status !== undefined && ["DRAFT", "APPROVED", "OPEN", "POSTED"].includes(header.status)) {
-            vendorCredit.status = header.status;
+        if (header.status !== undefined) {
+            vendorCredit.status = normalizeVendorCreditStatus(header.status, vendorCredit.status);
         }
 
         const lineItems = req.body.lineItems || req.body.lines || req.body.details;
@@ -1084,9 +1340,9 @@ export const VendorCreditController = {
             throw new Error(`Vendor Credit #${id} not found`);
         }
 
-        if (String(vendorCredit.status).toUpperCase() !== "DRAFT") {
+        if (!isVendorCreditEditable(vendorCredit.status)) {
             res.status(StatusCodes.BAD_REQUEST);
-            throw new Error(`Cannot delete Vendor Credit with status "${vendorCredit.status}". Only DRAFT records can be deleted.`);
+            throw new Error(`Cannot delete Vendor Credit with status "${vendorCredit.status}". Only pending approval or draft records can be deleted.`);
         }
 
         await VendorCreditLine.destroy({ where: { creditHeaderId: vendorCredit.id } });

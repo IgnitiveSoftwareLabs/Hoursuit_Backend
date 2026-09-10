@@ -201,7 +201,7 @@ export const TransactionOverviewController = {
         subsidiaryName: "—",
         amount: Number(b.totalAmount || 0),
         currency: b.currency || "INR",
-        status: b.status || "POSTED",
+        status: b.status || "APPROVED",
         viewUrl: "/purchase-invoice?id=" + b.id + "&action=view"
       }));
     }

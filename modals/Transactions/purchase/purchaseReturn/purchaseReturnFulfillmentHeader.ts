@@ -12,7 +12,7 @@ export interface PurchaseReturnFulfillmentHeaderAttributes {
     purchaseReturnHeaderId: number;
     vendorId: number;
     fulfillmentDate: Date;
-    status: "DRAFT" | "FULFILLED" | "CANCELLED";
+    status: "PENDING_APPROVAL" | "APPROVED" | "CANCELLED" | "DRAFT" | "FULFILLED";
     remarks?: string | null;
     user_id: number;
     createdAt?: Date;
@@ -43,7 +43,7 @@ export class PurchaseReturnFulfillmentHeader
     public purchaseReturnHeaderId!: number;
     public vendorId!: number;
     public fulfillmentDate!: Date;
-    public status!: "DRAFT" | "FULFILLED" | "CANCELLED";
+    public status!: "PENDING_APPROVAL" | "APPROVED" | "CANCELLED" | "DRAFT" | "FULFILLED";
     public remarks!: string | null;
     public user_id!: number;
     public readonly createdAt!: Date;
@@ -79,7 +79,7 @@ PurchaseReturnFulfillmentHeader.init(
             allowNull: false,
         },
         status: {
-            type: DataTypes.ENUM("DRAFT", "FULFILLED", "CANCELLED"),
+            type: DataTypes.STRING(50),
             allowNull: false,
             defaultValue: "FULFILLED",
         },

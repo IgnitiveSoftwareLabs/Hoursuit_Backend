@@ -22,7 +22,7 @@ export interface VendorCreditHeaderAttributes {
     totalAmount: number;
     appliedAmount?: number | null;
     refundedAmount?: number | null;
-    status: "DRAFT" | "POSTED" | "CANCELLED";
+    status: "DRAFT" | "PENDING_APPROVAL" | "APPROVED" | "PARTIALLY_APPLIED" | "FULLY_APPLIED" | "CLOSED" | "CANCELLED" | "POSTED";
     remarks?: string | null;
     user_id: number;
     createdAt?: Date;
@@ -67,7 +67,7 @@ export class VendorCreditHeader
     public totalAmount!: number;
     public appliedAmount!: number | null;
     public refundedAmount!: number | null;
-    public status!: "DRAFT" | "POSTED" | "CANCELLED";
+    public status!: "DRAFT" | "PENDING_APPROVAL" | "APPROVED" | "PARTIALLY_APPLIED" | "FULLY_APPLIED" | "CLOSED" | "CANCELLED" | "POSTED";
     public remarks!: string | null;
     public user_id!: number;
     public readonly createdAt!: Date;
@@ -141,9 +141,9 @@ VendorCreditHeader.init(
             defaultValue: 0,
         },
         status: {
-            type: DataTypes.ENUM("DRAFT", "POSTED", "CANCELLED"),
+            type: DataTypes.STRING(50),
             allowNull: false,
-            defaultValue: "POSTED",
+            defaultValue: "PENDING_APPROVAL",
         },
         remarks: {
             type: DataTypes.TEXT,

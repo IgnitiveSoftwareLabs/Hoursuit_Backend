@@ -24,7 +24,7 @@ export interface PurchasePaymentHeaderAttributes {
     currency?: string;
     exchangeRate?: number;
     referenceNo?: string | null;
-    status: "DRAFT" | "POSTED" | "CANCELLED";
+    status: "DRAFT" | "PENDING_APPROVAL" | "APPROVED" | "PROCESSED" | "CANCELLED" | "POSTED";
     remarks?: string | null;
     user_id: number;
     createdAt?: Date;
@@ -67,7 +67,7 @@ class PurchasePaymentHeader
     public currency!: string;
     public exchangeRate!: number;
     public referenceNo!: string | null;
-    public status!: "DRAFT" | "POSTED" | "CANCELLED";
+    public status!: "DRAFT" | "PENDING_APPROVAL" | "APPROVED" | "PROCESSED" | "CANCELLED" | "POSTED";
     public remarks!: string | null;
     public user_id!: number;
     public readonly createdAt!: Date;
@@ -87,7 +87,7 @@ class PurchasePaymentHeader
             currency: Joi.string().max(10).optional(),
             exchangeRate: Joi.number().positive().optional(),
             referenceNo: Joi.string().max(100).optional().allow(null, ""),
-            status: Joi.string().valid("DRAFT", "POSTED", "CANCELLED").optional(),
+            status: Joi.string().valid("DRAFT", "PENDING_APPROVAL", "APPROVED", "PROCESSED", "CANCELLED", "POSTED").optional(),
             remarks: Joi.string().max(500).optional().allow(null, ""),
             user_id: Joi.number().integer().positive().required(),
         });
@@ -156,9 +156,9 @@ PurchasePaymentHeader.init(
             allowNull: true,
         },
         status: {
-            type: DataTypes.ENUM("DRAFT", "POSTED", "CANCELLED"),
+            type: DataTypes.STRING(50),
             allowNull: false,
-            defaultValue: "DRAFT",
+            defaultValue: "PENDING_APPROVAL",
         },
         remarks: {
             type: DataTypes.TEXT,

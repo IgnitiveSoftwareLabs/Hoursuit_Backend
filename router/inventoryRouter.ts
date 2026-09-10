@@ -5,6 +5,7 @@ import verifyToken from "../middleware/auth/verifyToken";
 const inventoryRouter = express.Router();
 
 inventoryRouter.get("/", InventoryController.getInventoryItems);
-inventoryRouter.get("/get",verifyToken, InventoryController.getAllInventoryBalances);
-inventoryRouter.get("/getSingle/:id",verifyToken, InventoryController.getInventoryBalanceById);
+inventoryRouter.get("/get", verifyToken, InventoryController.getAllInventoryBalances);
+inventoryRouter.get("/getSingle/:id", verifyToken, InventoryController.getInventoryBalanceById);
+inventoryRouter.get("/export-csv", verifyToken, InventoryController.exportInventoryCSV);
 export default inventoryRouter;

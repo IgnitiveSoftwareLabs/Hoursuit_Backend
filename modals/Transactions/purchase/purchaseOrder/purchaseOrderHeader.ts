@@ -180,14 +180,20 @@ PurchaseOrder.init(
         },
         status: {
             type: DataTypes.ENUM(
-                "DRAFT",
+                "PENDING_APPROVAL",
                 "APPROVED",
-                "PARTIAL_RECEIVED",
-                "COMPLETED",
+                "REJECTED",
+                "PENDING_RECEIPT",
+                "PARTIALLY_RECEIVED",
+                "RECEIVED",
+                "PENDING_BILLING",
+                "PARTIALLY_BILLED",
+                "FULLY_BILLED",
+                "CLOSED",
                 "CANCELLED"
             ),
             allowNull: false,
-            defaultValue: "DRAFT"
+            defaultValue: "PENDING_APPROVAL"
         },
         city_id: {
             type: DataTypes.INTEGER.UNSIGNED,

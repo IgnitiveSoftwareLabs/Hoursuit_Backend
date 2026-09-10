@@ -5,6 +5,7 @@ import verifyToken from "../middleware/auth/verifyToken";
 const vendorRefundRouter = express.Router();
 
 vendorRefundRouter.post("/create", verifyToken, VendorRefundController.createVendorRefund);
+vendorRefundRouter.get("/export-csv", verifyToken, VendorRefundController.exportVendorRefundsCSV);
 vendorRefundRouter.get("/get", verifyToken, VendorRefundController.getAllVendorRefunds);
 vendorRefundRouter.get("/:id", verifyToken, VendorRefundController.getVendorRefundById);
 vendorRefundRouter.put("/:id", verifyToken, VendorRefundController.updateVendorRefund);

@@ -9,7 +9,8 @@ import ItemMaster from "../modals/masters/items/itemMaster";
 import UOMMaster from "../modals/masters/UOM/UOMMaster";
 import CityMaster from "../modals/masters/city/city";
 import InventoryCount from "../modals/inventory/inventory";
-import { normalizePurchaseOrderStatus } from "./p2pStatus";
+import { PurchaseInvoiceHeader, PurchaseInvoiceLine } from "../modals/Transactions/purchase/purchaseInvoice";
+import { normalizePurchaseOrderStatus, normalizeGRNStatus } from "./p2pStatus";
 
 export const InventoryService = {
   /**
@@ -215,7 +216,7 @@ export const InventoryService = {
   },
 
   /**
-   * Syncs Purchase Order status based on cumulative received quantities across all GRNs
+   * Syncs Purchase Order status based on full P2P cycle progression (Receipts, Billing, Payment)
    */
   syncPurchaseOrderStatus: async (
     poId: number,
@@ -227,22 +228,199 @@ export const InventoryService = {
       transaction
     });
 
-    if (!po || po.status === "CANCELLED" || po.status === "DRAFT") {
+    if (!po) return;
+
+    const currentNormStatus = normalizePurchaseOrderStatus(po.status);
+    if (currentNormStatus === "CANCELLED" || currentNormStatus === "REJECTED") {
       return;
     }
 
-    const summary = await InventoryService.getPurchaseOrderReceiptSummary(poId, companyId, undefined, transaction);
+    // Get cumulative receipt summary from GRN
+    const receiptSummary = await InventoryService.getPurchaseOrderReceiptSummary(poId, companyId, undefined, transaction);
+    const totalOrderedQty = Number(receiptSummary.totalOrderedQty || 0);
+    const totalReceivedQty = Number(receiptSummary.totalReceivedQty || 0);
+    const isFullyReceived = receiptSummary.isFullyReceived;
 
-    const nextStatus = summary.isFullyReceived
-      ? "COMPLETED"
-      : summary.totalReceivedQty > 0
-      ? "PARTIAL_RECEIVED"
-      : "APPROVED";
+    // Check for any non-cancelled GRNs linked to this PO
+    const allGrns = await GRN.findAll({
+      where: { purchaseOrderId: poId, CompanyId: companyId, status: { [Op.ne]: "CANCELLED" } } as any,
+      attributes: ["id", "status"],
+      transaction
+    });
+    const hasAnyGrn = allGrns.length > 0;
+    const grnIds = allGrns.map((g: any) => g.id);
+
+    // Get linked invoices (direct via poHeaderId or indirect via grnHeaderId)
+    const invoiceWhere: any = {
+      companyId,
+      status: { [Op.notIn]: ["CANCELLED", "REJECTED"] },
+      [Op.or]: [
+        { poHeaderId: poId },
+        ...(grnIds.length > 0 ? [{ grnHeaderId: { [Op.in]: grnIds } }] : [])
+      ]
+    };
+
+    const linkedInvoices = await PurchaseInvoiceHeader.findAll({
+      where: invoiceWhere,
+      include: [{ model: PurchaseInvoiceLine, as: "purchaseInvoiceLines" }],
+      transaction
+    });
+
+    const hasAnyInvoice = linkedInvoices.length > 0;
+    let totalBilledQty = 0;
+    let allInvoicesPaid = linkedInvoices.length > 0;
+
+    for (const inv of linkedInvoices) {
+      if (inv.status !== "PAID") {
+        allInvoicesPaid = false;
+      }
+      const lines = (inv as any).purchaseInvoiceLines || [];
+      for (const line of lines) {
+        totalBilledQty += Number(line.quantity || 0);
+      }
+    }
+
+    // Determine next P2P status
+    let nextStatus: string;
+
+    if (totalReceivedQty === 0 && totalBilledQty === 0) {
+      if (currentNormStatus === "PENDING_APPROVAL" || currentNormStatus === "DRAFT") {
+        nextStatus = "PENDING_APPROVAL";
+      } else if (hasAnyGrn) {
+        nextStatus = "PENDING_RECEIPT";
+      } else {
+        nextStatus = currentNormStatus === "PENDING_RECEIPT" ? "PENDING_RECEIPT" : "APPROVED";
+      }
+    } else if (totalReceivedQty > 0 && !isFullyReceived) {
+      if (totalBilledQty === 0) {
+        nextStatus = "PARTIALLY_RECEIVED";
+      } else if (totalBilledQty < totalOrderedQty) {
+        nextStatus = "PARTIALLY_BILLED";
+      } else {
+        nextStatus = "FULLY_BILLED";
+      }
+    } else if (isFullyReceived || (totalOrderedQty > 0 && totalReceivedQty >= totalOrderedQty)) {
+      if (totalBilledQty === 0) {
+        nextStatus = hasAnyInvoice ? "PENDING_BILLING" : "RECEIVED";
+      } else if (totalBilledQty < totalOrderedQty) {
+        nextStatus = "PARTIALLY_BILLED";
+      } else {
+        nextStatus = allInvoicesPaid ? "CLOSED" : "FULLY_BILLED";
+      }
+    } else if (totalBilledQty > 0) {
+      if (totalBilledQty < totalOrderedQty) {
+        nextStatus = "PARTIALLY_BILLED";
+      } else {
+        nextStatus = allInvoicesPaid ? "CLOSED" : "FULLY_BILLED";
+      }
+    } else {
+      nextStatus = currentNormStatus;
+    }
 
     const normalizedStatus = normalizePurchaseOrderStatus(nextStatus);
 
     if (po.status !== normalizedStatus) {
       await po.update({ status: normalizedStatus }, { transaction });
+    }
+  },
+
+  /**
+   * Syncs Goods Receipt Note (GRN) status based on full P2P cycle progression (Receipts, Billing, Payment)
+   */
+  syncGRNStatus: async (
+    grnId: number,
+    companyId: number,
+    transaction?: Transaction
+  ) => {
+    const grn = await GRN.findOne({
+      where: { id: grnId, CompanyId: companyId },
+      include: [
+        { model: GRNLine, as: "lineItems" },
+      ],
+      transaction
+    });
+
+    if (!grn) return;
+
+    const currentNormStatus = normalizeGRNStatus(grn.status);
+    if (currentNormStatus === "CANCELLED" || currentNormStatus === "REJECTED") {
+      return;
+    }
+
+    if (currentNormStatus === "PENDING_RECEIPT" || currentNormStatus === "DRAFT") {
+      return;
+    }
+
+    const grnLines = ((grn as any).lineItems || []) as any[];
+    const totalOrderedQty = grnLines.reduce((sum, l) => sum + Number(l.orderedQty || 0), 0);
+    const totalReceivedQty = grnLines.reduce((sum, l) => {
+      const q = Number(l.acceptedQty !== undefined && Number(l.acceptedQty) > 0 ? l.acceptedQty : l.receivedQty || 0);
+      return sum + q;
+    }, 0);
+    const isPartialReceipt = totalOrderedQty > 0 && totalReceivedQty < totalOrderedQty;
+
+    // Fetch linked invoices for this GRN
+    const grnLineIds = grnLines.map((l: any) => l.id).filter(Boolean);
+    const linkedInvoices = await PurchaseInvoiceHeader.findAll({
+      where: {
+        companyId,
+        status: { [Op.notIn]: ["CANCELLED", "REJECTED"] },
+        [Op.or]: [
+          { grnHeaderId: grnId },
+          ...(grnLineIds.length > 0 ? [{ "$purchaseInvoiceLines.grnLineId$": { [Op.in]: grnLineIds } }] : [])
+        ]
+      } as any,
+      include: [{ model: PurchaseInvoiceLine, as: "purchaseInvoiceLines" }],
+      transaction
+    });
+
+    let totalBilledQty = 0;
+    let allInvoicesPaid = linkedInvoices.length > 0;
+
+    for (const inv of linkedInvoices) {
+      if (inv.status !== "PAID") {
+        allInvoicesPaid = false;
+      }
+      const lines = (inv as any).purchaseInvoiceLines || [];
+      for (const line of lines) {
+        const matchesGrn = Number(inv.grnHeaderId) === Number(grnId) || (line.grnLineId && grnLineIds.includes(Number(line.grnLineId)));
+        if (matchesGrn) {
+          totalBilledQty += Number(line.quantity || 0);
+        }
+      }
+    }
+
+    let nextStatus: string;
+
+    if (totalBilledQty === 0) {
+      if (isPartialReceipt) {
+        nextStatus = "PARTIALLY_RECEIVED";
+      } else {
+        nextStatus = "PENDING_BILLING";
+      }
+    } else if (totalBilledQty < totalReceivedQty) {
+      if (isPartialReceipt) {
+        nextStatus = "PENDING_BILLING_PARTIALLY_RECEIVED";
+      } else {
+        nextStatus = "PENDING_BILLING";
+      }
+    } else if (totalBilledQty >= totalReceivedQty && totalReceivedQty > 0) {
+      if (allInvoicesPaid) {
+        nextStatus = "CLOSED";
+      } else {
+        nextStatus = "FULLY_BILLED";
+      }
+    } else {
+      nextStatus = currentNormStatus;
+    }
+
+    const normalizedStatus = normalizeGRNStatus(nextStatus);
+    if (grn.status !== normalizedStatus) {
+      await grn.update({ status: normalizedStatus as any }, { transaction });
+    }
+
+    if (grn.purchaseOrderId) {
+      await InventoryService.syncPurchaseOrderStatus(grn.purchaseOrderId, companyId, transaction);
     }
   },
 

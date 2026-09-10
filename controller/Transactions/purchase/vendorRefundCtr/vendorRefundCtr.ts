@@ -17,6 +17,7 @@ import VendorDetails from "../../../../modals/masters/vendorDetails/vendorDetail
 import ChartOfAccountMaster from "../../../../modals/masters/chartOfAccount/chartOfAccount";
 import { GLImpactService } from "../../../../utils/glImpactService";
 import { generateSequentialDocNumber } from "../../../../utils/documentNumberHelper";
+import { normalizeVendorRefundStatus, isVendorRefundEditable } from "../../../../utils/p2pStatus";
 
 export const VendorRefundController = {
     createVendorRefund: asyncHandler(async (req: CustomRequest, res: Response) => {
@@ -160,6 +161,8 @@ export const VendorRefundController = {
                 }
             }
 
+            const status = normalizeVendorRefundStatus(req.body.status, "PROCESSED");
+
             const vendorRefund = await VendorRefundHeader.create({
                 companyId,
                 refundNumber,
@@ -172,14 +175,19 @@ export const VendorRefundController = {
                 paymentMode,
                 referenceNumber: referenceNumber || null,
                 remarks: remarks || null,
-                status: "POSTED",
+                status,
                 user_id,
             }, { transaction });
 
-            // Update Vendor Credit refunded amount
+            // Update Vendor Credit refunded amount and status
             const newTotalRefunded = Number((alreadyRefunded + amountToRefund).toFixed(2));
+            const totalApplied = Number(vendorCredit.appliedAmount || 0);
+            const totalCredit = Number(vendorCredit.totalAmount || 0);
+            const newCreditStatus = (totalApplied + newTotalRefunded) >= (totalCredit - 0.01) ? "FULLY_APPLIED" : "PARTIALLY_APPLIED";
+
             await vendorCredit.update({
                 refundedAmount: newTotalRefunded,
+                status: newCreditStatus,
             }, { transaction });
 
             // Post GL Impact for Vendor Refund (DR Bank Account, CR Accounts Payable)
@@ -209,7 +217,7 @@ export const VendorRefundController = {
         }
     }),
 
-    getAllVendorRefunds: asyncHandler(async (req: CustomRequest, res: Response) => {
+        getAllVendorRefunds: asyncHandler(async (req: CustomRequest, res: Response) => {
         const company = await findCompanyForUser(req.user);
         const companyId = company?.id;
 
@@ -218,13 +226,166 @@ export const VendorRefundController = {
             throw new Error("User authentication required");
         }
 
-        const { page = 1, limit = 20, vendorId, vendorCreditId } = req.query;
+        const {
+            page = 1,
+            limit = 10,
+            search,
+            status,
+            vendorId,
+            vendorCreditId,
+            startDate,
+            endDate,
+            sortBy = "id",
+            sortOrder = "DESC",
+            option,
+        } = req.query;
 
         const whereClause: any = { companyId };
         if (vendorId) whereClause.vendorId = Number(vendorId);
         if (vendorCreditId) whereClause.vendorCreditId = Number(vendorCreditId);
+        if (status && status !== "ALL") whereClause.status = status;
+
+        if (startDate && endDate) {
+            const start = new Date(startDate as string);
+            const end = new Date(endDate as string);
+            end.setHours(23, 59, 59, 999);
+            whereClause.refundDate = { [Op.between]: [start, end] };
+        } else if (startDate) {
+            whereClause.refundDate = { [Op.gte]: new Date(startDate as string) };
+        } else if (endDate) {
+            const end = new Date(endDate as string);
+            end.setHours(23, 59, 59, 999);
+            whereClause.refundDate = { [Op.lte]: end };
+        }
+
+        if (search) {
+            const term = "%" + String(search) + "%";
+            whereClause[Op.or] = [
+                { refundNumber: { [Op.iLike]: term } },
+                { referenceNumber: { [Op.iLike]: term } },
+                { remarks: { [Op.iLike]: term } },
+                { "$vendor.company_name$": { [Op.iLike]: term } },
+                { "$vendorCredit.creditNoteNumber$": { [Op.iLike]: term } },
+            ];
+        }
+
+        const includes = [
+            {
+                model: VendorDetails,
+                as: "vendor",
+                attributes: ["id", "company_name", "entity_id", "email", "phone"],
+            },
+            {
+                model: VendorCreditHeader,
+                as: "vendorCredit",
+                attributes: ["id", "creditNoteNumber", "totalAmount", "appliedAmount", "refundedAmount"],
+            },
+            {
+                model: ChartOfAccountMaster,
+                as: "bankAccount",
+                attributes: ["id", "account_number", "account_name"],
+            },
+        ];
+
+        const isOption = String(option) === "true" || (option as any) === true;
+        let validSortBy = String(sortBy || "id");
+        if (validSortBy === "vendor_name") validSortBy = "vendorId";
+        const validSortOrder = String(sortOrder || "DESC").toUpperCase() === "ASC" ? "ASC" : "DESC";
+
+        if (isOption) {
+            const refunds = await VendorRefundHeader.findAll({
+                where: whereClause,
+                include: includes,
+                order: [[validSortBy, validSortOrder]],
+            });
+
+            const formattedRows = refunds.map((r: any) => {
+                const row = r.toJSON();
+                const vendorName = row.vendor?.company_name || "";
+                if (row.vendor) row.vendor.vendor_name = vendorName;
+                row.vendor_name = vendorName;
+                return row;
+            });
+
+            res.status(StatusCodes.OK).json({
+                success: true,
+                result: formattedRows,
+                total: formattedRows.length,
+            });
+            return;
+        }
+
+        const take = Math.max(1, Number(limit) || 10);
+        const pageNum = Math.max(1, Number(page) || 1);
+        const skip = (pageNum - 1) * take;
 
         const refunds = await VendorRefundHeader.findAndCountAll({
+            where: whereClause,
+            include: includes,
+            order: [[validSortBy, validSortOrder]],
+            limit: take,
+            offset: skip,
+            distinct: true,
+        });
+
+        const formattedRows = refunds.rows.map((r: any) => {
+            const row = r.toJSON();
+            const vendorName = row.vendor?.company_name || "";
+            if (row.vendor) row.vendor.vendor_name = vendorName;
+            row.vendor_name = vendorName;
+            return row;
+        });
+
+        res.status(StatusCodes.OK).json({
+            success: true,
+            result: formattedRows,
+            total: refunds.count,
+            page: pageNum,
+            totalPages: Math.ceil(refunds.count / take),
+        });
+    }),
+
+    exportVendorRefundsCSV: asyncHandler(async (req: CustomRequest, res: Response) => {
+        const company = await findCompanyForUser(req.user);
+        const companyId = company?.id;
+
+        if (!companyId) {
+            res.status(StatusCodes.UNAUTHORIZED);
+            throw new Error("User authentication required");
+        }
+
+        const { search, status, vendorId, vendorCreditId, startDate, endDate } = req.query;
+
+        const whereClause: any = { companyId };
+        if (vendorId) whereClause.vendorId = Number(vendorId);
+        if (vendorCreditId) whereClause.vendorCreditId = Number(vendorCreditId);
+        if (status && status !== "ALL") whereClause.status = status;
+
+        if (startDate && endDate) {
+            const start = new Date(startDate as string);
+            const end = new Date(endDate as string);
+            end.setHours(23, 59, 59, 999);
+            whereClause.refundDate = { [Op.between]: [start, end] };
+        } else if (startDate) {
+            whereClause.refundDate = { [Op.gte]: new Date(startDate as string) };
+        } else if (endDate) {
+            const end = new Date(endDate as string);
+            end.setHours(23, 59, 59, 999);
+            whereClause.refundDate = { [Op.lte]: end };
+        }
+
+        if (search) {
+            const term = "%" + String(search) + "%";
+            whereClause[Op.or] = [
+                { refundNumber: { [Op.iLike]: term } },
+                { referenceNumber: { [Op.iLike]: term } },
+                { remarks: { [Op.iLike]: term } },
+                { "$vendor.company_name$": { [Op.iLike]: term } },
+                { "$vendorCredit.creditNoteNumber$": { [Op.iLike]: term } },
+            ];
+        }
+
+        const refunds = await VendorRefundHeader.findAll({
             where: whereClause,
             include: [
                 {
@@ -244,25 +405,58 @@ export const VendorRefundController = {
                 },
             ],
             order: [["id", "DESC"]],
-            limit: Number(limit),
-            offset: (Number(page) - 1) * Number(limit),
         });
 
-        const formattedRows = refunds.rows.map((r: any) => {
-            const row = r.toJSON();
-            const vendorName = row.vendor?.company_name || "";
-            if (row.vendor) {
-                row.vendor.vendor_name = vendorName;
-            }
-            row.vendor_name = vendorName;
-            return row;
-        });
+        const escapeCSV = (val: any) => {
+            if (val === null || val === undefined) return '""';
+            const str = String(val);
+            return '"' + str.replace(/"/g, '""') + '"';
+        };
 
-        res.status(StatusCodes.OK).json({
-            success: true,
-            result: formattedRows,
-            count: refunds.count,
-        });
+        const headers = [
+            "Refund Number",
+            "Status",
+            "Refund Date",
+            "Vendor ID",
+            "Vendor Name",
+            "Vendor Credit Number",
+            "Bank Account Name",
+            "Bank Account Number",
+            "Refund Amount",
+            "Currency",
+            "Payment Mode",
+            "Reference Number",
+            "Remarks",
+            "Created At",
+        ];
+
+        const rows: string[] = [headers.join(",")];
+
+        for (const r of refunds) {
+            const refund = r.toJSON() as any;
+            const row = [
+                escapeCSV(refund.refundNumber),
+                escapeCSV(refund.status),
+                escapeCSV(refund.refundDate ? new Date(refund.refundDate).toISOString().split("T")[0] : ""),
+                escapeCSV(refund.vendor?.entity_id || refund.vendorId),
+                escapeCSV(refund.vendor?.company_name || ""),
+                escapeCSV(refund.vendorCredit?.creditNoteNumber || refund.vendorCreditId),
+                escapeCSV(refund.bankAccount?.account_name || ""),
+                escapeCSV(refund.bankAccount?.account_number || ""),
+                escapeCSV(refund.refundAmount),
+                escapeCSV(refund.currency || "INR"),
+                escapeCSV(refund.paymentMode || ""),
+                escapeCSV(refund.referenceNumber || ""),
+                escapeCSV(refund.remarks || ""),
+                escapeCSV(refund.createdAt ? new Date(refund.createdAt).toISOString().split("T")[0] : ""),
+            ];
+            rows.push(row.join(","));
+        }
+
+        const csvContent = rows.join("\r\n");
+        res.setHeader("Content-Type", "text/csv; charset=utf-8");
+        res.setHeader("Content-Disposition", 'attachment; filename="Vendor_Refunds_' + Date.now() + '.csv"');
+        res.status(StatusCodes.OK).send(csvContent);
     }),
 
     getVendorRefundById: asyncHandler(async (req: CustomRequest, res: Response) => {
@@ -331,9 +525,9 @@ export const VendorRefundController = {
             throw new Error(`Vendor Refund #${id} not found`);
         }
 
-        if (String(refund.status).toUpperCase() !== "DRAFT") {
+        if (!isVendorRefundEditable(refund.status)) {
             res.status(StatusCodes.BAD_REQUEST);
-            throw new Error(`Cannot edit Vendor Refund with status "${refund.status}". Only DRAFT records can be modified.`);
+            throw new Error(`Cannot edit Vendor Refund with status "${refund.status}". Only pending approval or draft records can be modified.`);
         }
 
         const { remarks, referenceNumber } = req.body;
@@ -368,9 +562,9 @@ export const VendorRefundController = {
             throw new Error(`Vendor Refund #${id} not found`);
         }
 
-        if (String(refund.status).toUpperCase() !== "DRAFT") {
+        if (!isVendorRefundEditable(refund.status)) {
             res.status(StatusCodes.BAD_REQUEST);
-            throw new Error(`Cannot delete Vendor Refund with status "${refund.status}". Only DRAFT records can be deleted.`);
+            throw new Error(`Cannot delete Vendor Refund with status "${refund.status}". Only pending approval or draft records can be deleted.`);
         }
 
         await refund.destroy();

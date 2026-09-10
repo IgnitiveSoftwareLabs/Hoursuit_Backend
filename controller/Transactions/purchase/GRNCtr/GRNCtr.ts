@@ -8,6 +8,9 @@ import AccountTypeMaster from "../../../../modals/platform/accountType/accountTy
 import { GRN, GRNLine } from "../../../../modals/Transactions/purchase/GRN";
 import { findCompanyForUser } from "../../../../utils/findCompanyForUser";
 import Warehouse from "../../../../modals/masters/warehouse/warehouse";
+import Godown from "../../../../modals/masters/godown/godown";
+import Stack from "../../../../modals/masters/stack/stack";
+import VendorDetails from "../../../../modals/masters/vendorDetails/vendorDetails";
 import TransportationMode from "../../../../modals/masters/transportMode/transportMode";
 import CityMaster from "../../../../modals/masters/city/city";
 import { InventoryService } from "../../../../utils/inventoryService";
@@ -103,7 +106,7 @@ const GRNController = {
                 driverName: header.driverName || null,
                 driverPhoneNo: header.driverPhoneNo || header.driverPhone || null,
                 memo: header.memo || null,
-                status: normalizeGRNStatus(header.status, "DRAFT"),
+                status: normalizeGRNStatus(header.status, "PENDING_RECEIPT"),
                 remarks: header.remarks || null,
                 CompanyId,
                 user_id,
@@ -137,9 +140,13 @@ const GRNController = {
                 }
 
                 const poStatus = String(po.status || "").toUpperCase();
-                if (poStatus === "DRAFT") {
+                if (poStatus === "DRAFT" || poStatus === "PENDING_APPROVAL") {
                     res.status(StatusCodes.BAD_REQUEST);
-                    throw new Error(`Cannot create GRN for Purchase Order ${po.purchaseNo || po.id} because it is in DRAFT status. Purchase Order must be approved first.`);
+                    throw new Error(`Cannot create GRN for Purchase Order ${po.purchaseNo || po.id} because it is in Pending Approval status. Purchase Order must be approved first.`);
+                }
+                if (poStatus === "REJECTED") {
+                    res.status(StatusCodes.BAD_REQUEST);
+                    throw new Error(`Cannot create GRN for Purchase Order ${po.purchaseNo || po.id} because it is REJECTED.`);
                 }
                 if (poStatus === "CANCELLED") {
                     res.status(StatusCodes.BAD_REQUEST);
@@ -293,8 +300,8 @@ const GRNController = {
                 await InventoryService.syncPurchaseOrderStatus(headerPayload.purchaseOrderId, CompanyId, transaction);
             }
 
-            const isActiveGRNStatus = (s: string) => ["RECEIVED", "QC_PENDING", "QC_COMPLETED", "COMPLETED"].includes(s);
-            if (isActiveGRNStatus(createdHeader.status)) {
+            const isReceivedOrApprovedStatus = (s: string) => ["APPROVED", "RECEIVED", "PENDING_BILLING", "PENDING_BILLING_PARTIALLY_RECEIVED", "PARTIALLY_RECEIVED", "FULLY_BILLED", "CLOSED"].includes(s);
+            if (isReceivedOrApprovedStatus(createdHeader.status)) {
                 await InventoryService.updateStockFromGRN(
                     createdHeader.id,
                     createdHeader.warehouseId || 1,
@@ -311,6 +318,7 @@ const GRNController = {
                     undefined,
                     transaction
                 );
+                await InventoryService.syncGRNStatus(createdHeader.id, CompanyId, transaction);
             }
 
             await transaction.commit();
@@ -340,55 +348,182 @@ const GRNController = {
             throw new Error("User authentication required");
         }
 
-        const { page = 1, limit = 10, search } = req.query;
-        const offset = (Number(page) - 1) * Number(limit);
+        const { page = 1, limit = 10, search, status, startDate, endDate, fromDate, toDate } = req.query;
+        const option = String(req.query.option || "").toLowerCase() === "true" || String(req.query.option || "") === "1";
 
         const whereClause: any = { CompanyId };
+
+        // Search condition
         if (search) {
-            whereClause[Op.or] = [
-                { grnNo: { [Op.like]: `%${search}%` } },
-                { vehicleNo: { [Op.like]: `%${search}%` } },
-                { driverName: { [Op.like]: `%${search}%` } },
+            const searchStr = String(search).trim();
+            const matchingPOs = await PurchaseOrder.findAll({
+                where: {
+                    CompanyId,
+                    purchaseNo: { [Op.like]: `%${searchStr}%` },
+                },
+                attributes: ["id"],
+            });
+            const poIds = matchingPOs.map((p: any) => p.id);
+
+            const searchConditions: any[] = [
+                { grnNo: { [Op.like]: `%${searchStr}%` } },
+                { vehicleNo: { [Op.like]: `%${searchStr}%` } },
+                { driverName: { [Op.like]: `%${searchStr}%` } },
+                { driverPhoneNo: { [Op.like]: `%${searchStr}%` } },
+                { remarks: { [Op.like]: `%${searchStr}%` } },
             ];
+
+            if (poIds.length > 0) {
+                searchConditions.push({ purchaseOrderId: { [Op.in]: poIds } });
+            }
+
+            if (!isNaN(Number(searchStr))) {
+                searchConditions.push({ id: Number(searchStr) });
+            }
+
+            whereClause[Op.or] = searchConditions;
         }
+
+        // Status filter
+        if (status && status !== "" && status !== "ALL") {
+            const statusVal = String(status).trim();
+            if (statusVal === "PENDING_RECEIPT" || statusVal === "DRAFT") {
+                whereClause.status = { [Op.in]: ["PENDING_RECEIPT", "DRAFT"] };
+            } else if (statusVal === "APPROVED" || statusVal === "RECEIVED") {
+                whereClause.status = { [Op.in]: ["APPROVED", "RECEIVED"] };
+            } else if (statusVal === "CLOSED" || statusVal === "COMPLETED") {
+                whereClause.status = { [Op.in]: ["CLOSED", "COMPLETED"] };
+            } else if (statusVal === "FULLY_BILLED" || statusVal === "BILLED") {
+                whereClause.status = { [Op.in]: ["FULLY_BILLED", "BILLED"] };
+            } else if (statusVal === "PARTIALLY_RECEIVED" || statusVal === "PARTIAL_RECEIVED") {
+                whereClause.status = { [Op.in]: ["PARTIALLY_RECEIVED", "PARTIAL_RECEIVED"] };
+            } else {
+                whereClause.status = statusVal;
+            }
+        }
+
+        // Date range filter
+        const fromD = startDate || fromDate;
+        const toD = endDate || toDate;
+        if (fromD && toD) {
+            const start = new Date(fromD as string);
+            start.setHours(0, 0, 0, 0);
+            const end = new Date(toD as string);
+            end.setHours(23, 59, 59, 999);
+            whereClause.grnDate = { [Op.between]: [start, end] };
+        } else if (fromD) {
+            const start = new Date(fromD as string);
+            start.setHours(0, 0, 0, 0);
+            whereClause.grnDate = { [Op.gte]: start };
+        } else if (toD) {
+            const end = new Date(toD as string);
+            end.setHours(23, 59, 59, 999);
+            whereClause.grnDate = { [Op.lte]: end };
+        }
+
+        // Sort configuration
+        const sortBy = typeof req.query.sortBy === "string" ? req.query.sortBy : "createdAt";
+        const sortOrder = String(req.query.sortOrder || "DESC").toUpperCase() === "ASC" ? "ASC" : "DESC";
+
+        const sortFieldMap: { [key: string]: any } = {
+            id: [["id", sortOrder]],
+            grnNo: [["grnNo", sortOrder]],
+            grnDate: [["grnDate", sortOrder]],
+            status: [["status", sortOrder]],
+            vehicleNo: [["vehicleNo", sortOrder]],
+            driverName: [["driverName", sortOrder]],
+            createdAt: [["createdAt", sortOrder]],
+            updatedAt: [["updatedAt", sortOrder]],
+        };
+
+        const orderClause = sortFieldMap[sortBy] || [["createdAt", "DESC"]];
+
+        const grnIncludes = [
+            {
+                model: PurchaseOrder,
+                as: "purchaseOrder",
+                attributes: ["id", "purchaseNo", "vendor_id", "purchaseDate", "deliveryDate", "status"],
+                include: [
+                    {
+                        model: VendorDetails,
+                        as: "vendor",
+                        attributes: ["id", "company_name", "first_name", "last_name", "salutation", "entity_id"],
+                        required: false,
+                    },
+                ],
+            },
+            {
+                model: TransportationMode,
+                as: "transportationMode",
+                attributes: ["id", "mode_name"],
+                required: false,
+            },
+            {
+                model: Warehouse,
+                as: "warehouse",
+                attributes: ["id", "name"],
+                required: false,
+            },
+            {
+                model: Godown,
+                as: "godown",
+                attributes: ["id", "name"],
+                required: false,
+            },
+            {
+                model: Stack,
+                as: "stack",
+                attributes: ["id", "name"],
+                required: false,
+            },
+            {
+                model: GRNLine,
+                as: "lineItems",
+                required: false,
+                include: [
+                    getItemIncludeConfig(),
+                    {
+                        model: CityMaster,
+                        as: "location",
+                        attributes: ["id", "city_name"],
+                    },
+                    {
+                        model: PurchaseOrderLine,
+                        as: "purchaseOrderLine",
+                        attributes: ["id", "quantity", "rate", "amount", "discount_amount", "subtotal", "tax_amount", "line_total"],
+                    },
+                ],
+            },
+        ];
+
+        // Bypass pagination if option is true
+        if (option) {
+            const grns = await GRN.findAll({
+                where: whereClause,
+                include: grnIncludes,
+                order: orderClause,
+            });
+
+            res.status(StatusCodes.OK).json({
+                message: "GRNs fetched successfully",
+                success: true,
+                result: grns,
+                total: grns.length,
+            });
+            return;
+        }
+
+        const pageNum = Math.max(1, Number(page) || 1);
+        const limitNum = Math.max(1, Number(limit) || 10);
+        const offset = (pageNum - 1) * limitNum;
 
         const total = await GRN.count({ where: whereClause });
         const grns = await GRN.findAll({
             where: whereClause,
-            subQuery: false,
-            include: [
-                {
-                    model: PurchaseOrder,
-                    as: "purchaseOrder",
-                    attributes: ["id", "purchaseNo", "vendor_id", "purchaseDate", "deliveryDate", "status"],
-                },
-                {
-                    model: TransportationMode,
-                    as: "transportationMode",
-                    attributes: ["id", "mode_name"],
-                },
-                {
-                    model: GRNLine,
-                    as: "lineItems",
-                    required: false,
-                    include: [
-                        getItemIncludeConfig(),
-                        {
-                            model: CityMaster,
-                            as: "location",
-                            attributes: ["id", "city_name"],
-                        },
-                        {
-                            model: PurchaseOrderLine,
-                            as: "purchaseOrderLine",
-                            attributes: ["id", "quantity", "rate", "amount", "discount_amount", "subtotal", "tax_amount", "line_total"],
-                        },
-                    ],
-                },
-            ],
+            include: grnIncludes,
             offset,
-            limit: Number(limit),
-            order: [["createdAt", "DESC"]],
+            limit: limitNum,
+            order: orderClause,
         });
 
         res.status(StatusCodes.OK).json({
@@ -397,10 +532,11 @@ const GRNController = {
             result: grns,
             pagination: {
                 total,
-                page: Number(page),
-                limit: Number(limit),
-                totalPages: Math.ceil(total / Number(limit)),
+                page: pageNum,
+                limit: limitNum,
+                totalPages: Math.ceil(total / limitNum),
             },
+            total,
         });
     }),
 
@@ -508,9 +644,10 @@ const GRNController = {
                 throw new Error("GRN not found");
             }
 
-            if (String(existingGRN.status || "").toUpperCase() !== "DRAFT") {
+            const normStatus = normalizeGRNStatus(existingGRN.status);
+            if (normStatus !== "PENDING_RECEIPT" && normStatus !== "DRAFT") {
                 res.status(StatusCodes.BAD_REQUEST);
-                throw new Error("Cannot update GRN. Only DRAFT GRNs can be updated.");
+                throw new Error("Cannot update GRN. Only GRNs in 'Pending Receipt' status can be edited.");
             }
 
             const headerPayload: any = {
@@ -525,7 +662,7 @@ const GRNController = {
                 driverName: header.hasOwnProperty("driverName") ? header.driverName : existingGRN.driverName,
                 driverPhoneNo: header.hasOwnProperty("driverPhoneNo") ? header.driverPhoneNo : (header.hasOwnProperty("driverPhone") ? header.driverPhone : existingGRN.driverPhoneNo),
                 memo: header.hasOwnProperty("memo") ? header.memo : existingGRN.memo,
-                status: normalizeGRNStatus(header.status || existingGRN.status, existingGRN.status || "DRAFT"),
+                status: normalizeGRNStatus(header.status || existingGRN.status, "PENDING_RECEIPT"),
                 remarks: header.hasOwnProperty("remarks") ? header.remarks : existingGRN.remarks,
                 CompanyId,
                 user_id,
@@ -564,6 +701,14 @@ const GRNController = {
                 }
 
                 const poStatus = String(po.status || "").toUpperCase();
+                if (poStatus === "DRAFT" || poStatus === "PENDING_APPROVAL") {
+                    res.status(StatusCodes.BAD_REQUEST);
+                    throw new Error(`Cannot update GRN for Purchase Order ${po.purchaseNo || po.id} because it is in Pending Approval status. Purchase Order must be approved first.`);
+                }
+                if (poStatus === "REJECTED") {
+                    res.status(StatusCodes.BAD_REQUEST);
+                    throw new Error(`Cannot update GRN for Purchase Order ${po.purchaseNo || po.id} because it is REJECTED.`);
+                }
                 if (poStatus === "CANCELLED") {
                     res.status(StatusCodes.BAD_REQUEST);
                     throw new Error(`Cannot update GRN for Purchase Order ${po.purchaseNo || po.id} because it is CANCELLED.`);
@@ -776,21 +921,17 @@ const GRNController = {
             return;
         }
 
-        // Prevent double posting/approval
-        const isActiveGRNStatus = (s: string) => ["RECEIVED", "QC_PENDING", "QC_COMPLETED", "COMPLETED"].includes(s);
-        if (isActiveGRNStatus(previousStatus) && isActiveGRNStatus(normalizedStatus)) {
-            res.status(StatusCodes.BAD_REQUEST);
-            throw new Error(`GRN is already in ${previousStatus} state.`);
-        }
+        const isUnpostedState = (s: string) => s === "PENDING_RECEIPT" || s === "DRAFT";
+        const isPostedState = (s: string) => ["APPROVED", "RECEIVED", "PENDING_BILLING", "PENDING_BILLING_PARTIALLY_RECEIVED", "PARTIALLY_RECEIVED", "FULLY_BILLED", "CLOSED"].includes(s);
 
         // Managed transaction for status transition, stock, and GL updates
         await sequelize.transaction(async (t: any) => {
             await grn.update({
-                status: normalizedStatus as "DRAFT" | "RECEIVED" | "QC_PENDING" | "QC_COMPLETED" | "COMPLETED" | "CANCELLED"
+                status: normalizedStatus as any
             }, { transaction: t });
 
-            // If transitioning to a received/complete state from a draft state
-            if (isActiveGRNStatus(normalizedStatus) && !isActiveGRNStatus(previousStatus)) {
+            // If transitioning to a received/complete state from a pending receipt state
+            if (isPostedState(normalizedStatus) && isUnpostedState(previousStatus)) {
                 await InventoryService.updateStockFromGRN(
                     grn.id,
                     grn.warehouseId || 1,
@@ -814,8 +955,8 @@ const GRNController = {
                 );
             }
 
-            // If transitioning to CANCELLED from APPROVED/RECEIVED
-            if (normalizedStatus === "CANCELLED" && isActiveGRNStatus(previousStatus)) {
+            // If transitioning to CANCELLED or REJECTED from an approved state
+            if ((normalizedStatus === "CANCELLED" || normalizedStatus === "REJECTED") && isPostedState(previousStatus)) {
                 await InventoryService.reverseStockFromGRN(
                     grn.id,
                     grn.warehouseId || 1,
@@ -825,7 +966,10 @@ const GRNController = {
                 );
             }
 
-            // Sync Purchase Order status whenever GRN status changes
+            // Sync GRN and Purchase Order status
+            if (isPostedState(normalizedStatus)) {
+                await InventoryService.syncGRNStatus(grn.id, CompanyId, t);
+            }
             if (grn.purchaseOrderId) {
                 await InventoryService.syncPurchaseOrderStatus(grn.purchaseOrderId, CompanyId, t);
             }
@@ -859,9 +1003,10 @@ const GRNController = {
             throw new Error("GRN not found");
         }
 
-        if (String(grn.status || "").toUpperCase() !== "DRAFT") {
+        const normStatus = normalizeGRNStatus(grn.status);
+        if (normStatus !== "PENDING_RECEIPT" && normStatus !== "DRAFT") {
             res.status(StatusCodes.BAD_REQUEST);
-            throw new Error("Cannot delete GRN. Only DRAFT GRNs can be deleted.");
+            throw new Error("Cannot delete GRN. Only GRNs in 'Pending Receipt' status can be deleted.");
         }
 
         const poIdToSync = grn.purchaseOrderId;
@@ -882,7 +1027,7 @@ const GRNController = {
     exportGRNCSV: asyncHandler(async (req: CustomRequest, res: Response) => {
         const company = await findCompanyForUser(req.user);
         const CompanyId = company?.id;
-        const { fromDate, toDate, status, purchaseOrderId } = req.query;
+        const { fromDate, toDate, startDate, endDate, status, purchaseOrderId, search } = req.query;
 
         if (!CompanyId) {
             res.status(StatusCodes.UNAUTHORIZED);
@@ -890,6 +1035,9 @@ const GRNController = {
         }
 
         const whereClause: any = { CompanyId };
+
+        const fromD = startDate || fromDate;
+        const toD = endDate || toDate;
 
         const convertDateFormat = (dateStr: string): string => {
             if (dateStr.includes("/")) {
@@ -901,22 +1049,70 @@ const GRNController = {
             return dateStr;
         };
 
-        if (fromDate || toDate) {
+        if (fromD || toD) {
             const dateConditions: any = {};
-            if (fromDate) {
-                dateConditions[Op.gte] = convertDateFormat(fromDate as string);
+            if (fromD) {
+                const s = new Date(convertDateFormat(fromD as string));
+                s.setHours(0, 0, 0, 0);
+                dateConditions[Op.gte] = s;
             }
-            if (toDate) {
-                dateConditions[Op.lte] = convertDateFormat(toDate as string);
+            if (toD) {
+                const e = new Date(convertDateFormat(toD as string));
+                e.setHours(23, 59, 59, 999);
+                dateConditions[Op.lte] = e;
             }
             whereClause.grnDate = dateConditions;
         }
 
-        if (status) {
-            whereClause.status = status;
+        if (status && status !== "" && status !== "ALL") {
+            const statusVal = String(status).trim();
+            if (statusVal === "PENDING_RECEIPT" || statusVal === "DRAFT") {
+                whereClause.status = { [Op.in]: ["PENDING_RECEIPT", "DRAFT"] };
+            } else if (statusVal === "APPROVED" || statusVal === "RECEIVED") {
+                whereClause.status = { [Op.in]: ["APPROVED", "RECEIVED"] };
+            } else if (statusVal === "CLOSED" || statusVal === "COMPLETED") {
+                whereClause.status = { [Op.in]: ["CLOSED", "COMPLETED"] };
+            } else if (statusVal === "FULLY_BILLED" || statusVal === "BILLED") {
+                whereClause.status = { [Op.in]: ["FULLY_BILLED", "BILLED"] };
+            } else if (statusVal === "PARTIALLY_RECEIVED" || statusVal === "PARTIAL_RECEIVED") {
+                whereClause.status = { [Op.in]: ["PARTIALLY_RECEIVED", "PARTIAL_RECEIVED"] };
+            } else {
+                whereClause.status = statusVal;
+            }
         }
+
         if (purchaseOrderId) {
             whereClause.purchaseOrderId = Number(purchaseOrderId);
+        }
+
+        if (search) {
+            const searchStr = String(search).trim();
+            const matchingPOs = await PurchaseOrder.findAll({
+                where: {
+                    CompanyId,
+                    purchaseNo: { [Op.like]: `%${searchStr}%` },
+                },
+                attributes: ["id"],
+            });
+            const poIds = matchingPOs.map((p: any) => p.id);
+
+            const searchConditions: any[] = [
+                { grnNo: { [Op.like]: `%${searchStr}%` } },
+                { vehicleNo: { [Op.like]: `%${searchStr}%` } },
+                { driverName: { [Op.like]: `%${searchStr}%` } },
+                { driverPhoneNo: { [Op.like]: `%${searchStr}%` } },
+                { remarks: { [Op.like]: `%${searchStr}%` } },
+            ];
+
+            if (poIds.length > 0) {
+                searchConditions.push({ purchaseOrderId: { [Op.in]: poIds } });
+            }
+
+            if (!isNaN(Number(searchStr))) {
+                searchConditions.push({ id: Number(searchStr) });
+            }
+
+            whereClause[Op.or] = searchConditions;
         }
 
         const grns = await GRN.findAll({
@@ -925,12 +1121,39 @@ const GRNController = {
                 {
                     model: PurchaseOrder,
                     as: "purchaseOrder",
-                    attributes: ["id", "purchaseNo"],
+                    attributes: ["id", "purchaseNo", "vendor_id"],
+                    include: [
+                        {
+                            model: VendorDetails,
+                            as: "vendor",
+                            attributes: ["id", "company_name", "first_name", "last_name", "salutation", "entity_id"],
+                            required: false,
+                        },
+                    ],
                 },
                 {
                     model: TransportationMode,
                     as: "transportationMode",
                     attributes: ["id", "mode_name"],
+                    required: false,
+                },
+                {
+                    model: Warehouse,
+                    as: "warehouse",
+                    attributes: ["id", "name"],
+                    required: false,
+                },
+                {
+                    model: Godown,
+                    as: "godown",
+                    attributes: ["id", "name"],
+                    required: false,
+                },
+                {
+                    model: Stack,
+                    as: "stack",
+                    attributes: ["id", "name"],
+                    required: false,
                 },
                 {
                     model: GRNLine,
@@ -960,27 +1183,41 @@ const GRNController = {
 
         const csvData: any[] = [];
         grns.forEach((grn: any) => {
+            const vendorObj = grn.purchaseOrder?.vendor;
+            const vendorName = vendorObj
+                ? (vendorObj.company_name || [vendorObj.salutation, vendorObj.first_name, vendorObj.last_name].filter(Boolean).join(" "))
+                : "";
+
             if (grn.lineItems && grn.lineItems.length > 0) {
                 grn.lineItems.forEach((lineItem: any) => {
                     csvData.push({
                         "GRN Number": grn.grnNo || "",
                         "GRN Date": grn.grnDate ? new Date(grn.grnDate).toLocaleDateString() : "",
                         "Purchase Order": grn.purchaseOrder?.purchaseNo || "",
+                        "Vendor": vendorName,
+                        "Warehouse": grn.warehouse?.name || "",
+                        "Godown": grn.godown?.name || "",
+                        "Stack": grn.stack?.name || "",
                         "Transportation Mode": grn.transportationMode?.mode_name || "",
                         "Vehicle No": grn.vehicleNo || "",
                         "Driver Name": grn.driverName || "",
                         "Driver Phone No": grn.driverPhoneNo || "",
                         Status: grn.status || "",
-                        Remarks: grn.remarks || "",
+                        "Header Memo": grn.memo || "",
+                        "Header Remarks": grn.remarks || "",
                         "Item Code": lineItem.item?.item_code || "",
                         "Item Name": lineItem.item?.item_name || "",
                         "Location": lineItem.location?.city_name || "",
                         "On Hand Qty": lineItem.onHand || 0,
-                        Quantity: lineItem.receivedQty || 0,
+                        "Ordered Qty": lineItem.orderedQty || 0,
+                        "Received Qty": lineItem.receivedQty || 0,
                         "Accepted Qty": lineItem.acceptedQty || 0,
                         "Rejected Qty": lineItem.rejectedQty || 0,
+                        "Manufacturing Date": lineItem.manufacturingDate ? new Date(lineItem.manufacturingDate).toLocaleDateString() : "",
+                        "Expiry Date": lineItem.expiryDate ? new Date(lineItem.expiryDate).toLocaleDateString() : "",
                         "QC Required": lineItem.qcRequired ? "YES" : "NO",
                         "Line Status": lineItem.status || "",
+                        "Line Remarks": lineItem.remarks || "",
                     });
                 });
             } else {
@@ -988,21 +1225,30 @@ const GRNController = {
                     "GRN Number": grn.grnNo || "",
                     "GRN Date": grn.grnDate ? new Date(grn.grnDate).toLocaleDateString() : "",
                     "Purchase Order": grn.purchaseOrder?.purchaseNo || "",
+                    "Vendor": vendorName,
+                    "Warehouse": grn.warehouse?.name || "",
+                    "Godown": grn.godown?.name || "",
+                    "Stack": grn.stack?.name || "",
                     "Transportation Mode": grn.transportationMode?.mode_name || "",
                     "Vehicle No": grn.vehicleNo || "",
                     "Driver Name": grn.driverName || "",
                     "Driver Phone No": grn.driverPhoneNo || "",
                     Status: grn.status || "",
-                    Remarks: grn.remarks || "",
+                    "Header Memo": grn.memo || "",
+                    "Header Remarks": grn.remarks || "",
                     "Item Code": "",
                     "Item Name": "",
                     "Location": "",
                     "On Hand Qty": 0,
-                    Quantity: 0,
+                    "Ordered Qty": 0,
+                    "Received Qty": 0,
                     "Accepted Qty": 0,
                     "Rejected Qty": 0,
+                    "Manufacturing Date": "",
+                    "Expiry Date": "",
                     "QC Required": "",
                     "Line Status": "",
+                    "Line Remarks": "",
                 });
             }
         });
@@ -1011,21 +1257,30 @@ const GRNController = {
             "GRN Number",
             "GRN Date",
             "Purchase Order",
+            "Vendor",
+            "Warehouse",
+            "Godown",
+            "Stack",
             "Transportation Mode",
             "Vehicle No",
             "Driver Name",
             "Driver Phone No",
             "Status",
-            "Remarks",
+            "Header Memo",
+            "Header Remarks",
             "Item Code",
             "Item Name",
             "Location",
             "On Hand Qty",
-            "Quantity",
+            "Ordered Qty",
+            "Received Qty",
             "Accepted Qty",
             "Rejected Qty",
+            "Manufacturing Date",
+            "Expiry Date",
             "QC Required",
             "Line Status",
+            "Line Remarks",
         ];
 
         const csvContent = [
@@ -1034,17 +1289,21 @@ const GRNController = {
                 headers
                     .map((header) => {
                         const value = row[header];
-                        if (typeof value === "string" && (value.includes(",") || value.includes('"'))) {
-                            return `"${value.replace(/"/g, '""')}"`;
+                        if (value === null || value === undefined) {
+                            return '""';
                         }
-                        return value;
+                        const stringValue = String(value);
+                        if (stringValue.includes(",") || stringValue.includes('"') || stringValue.includes("\n") || stringValue.includes("\r")) {
+                            return `"${stringValue.replace(/"/g, '""')}"`;
+                        }
+                        return stringValue;
                     })
                     .join(",")
             ),
         ].join("\n");
 
         const filename = `grn_export_${new Date().toISOString().split("T")[0]}.csv`;
-        res.setHeader("Content-Type", "text/csv");
+        res.setHeader("Content-Type", "text/csv; charset=utf-8");
         res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
         res.status(StatusCodes.OK).send(csvContent);
     }),

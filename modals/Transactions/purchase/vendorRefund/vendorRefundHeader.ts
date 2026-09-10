@@ -19,7 +19,7 @@ export interface VendorRefundHeaderAttributes {
     paymentMode?: string | null;
     referenceNumber?: string | null;
     remarks?: string | null;
-    status: "DRAFT" | "POSTED" | "CANCELLED";
+    status: "DRAFT" | "PENDING_APPROVAL" | "APPROVED" | "PROCESSED" | "CANCELLED" | "FAILED" | "POSTED";
     user_id: number;
     createdAt?: Date;
     updatedAt?: Date;
@@ -57,7 +57,7 @@ export class VendorRefundHeader
     public paymentMode!: string | null;
     public referenceNumber!: string | null;
     public remarks!: string | null;
-    public status!: "DRAFT" | "POSTED" | "CANCELLED";
+    public status!: "DRAFT" | "PENDING_APPROVAL" | "APPROVED" | "PROCESSED" | "CANCELLED" | "FAILED" | "POSTED";
     public user_id!: number;
     public readonly createdAt!: Date;
     public readonly updatedAt!: Date;
@@ -120,9 +120,9 @@ VendorRefundHeader.init(
             allowNull: true,
         },
         status: {
-            type: DataTypes.ENUM("DRAFT", "POSTED", "CANCELLED"),
+            type: DataTypes.STRING(50),
             allowNull: false,
-            defaultValue: "POSTED",
+            defaultValue: "PENDING_APPROVAL",
         },
         user_id: {
             type: DataTypes.INTEGER,

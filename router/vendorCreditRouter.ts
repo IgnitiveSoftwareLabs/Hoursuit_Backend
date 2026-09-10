@@ -8,6 +8,7 @@ vendorCreditRouter.post("/create", verifyToken, VendorCreditController.createVen
 vendorCreditRouter.post("/apply", verifyToken, VendorCreditController.applyVendorCreditToBills);
 vendorCreditRouter.post("/apply-to-bill", verifyToken, VendorCreditController.applyCreditsToBill);
 vendorCreditRouter.get("/get", verifyToken, VendorCreditController.getAllVendorCredits);
+vendorCreditRouter.get("/export-csv", verifyToken, VendorCreditController.exportVendorCreditsCSV);
 vendorCreditRouter.get("/open-bills/:vendorId", verifyToken, VendorCreditController.getOpenBillsForVendor);
 vendorCreditRouter.get("/open-credits/:vendorId", verifyToken, VendorCreditController.getOpenCreditsForVendor);
 vendorCreditRouter.get("/:id/applications", verifyToken, VendorCreditController.getVendorCreditApplications);

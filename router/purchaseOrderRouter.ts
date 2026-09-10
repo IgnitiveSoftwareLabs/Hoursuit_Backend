@@ -7,6 +7,7 @@ const purchaseOrderRouter = express.Router();
 
 purchaseOrderRouter.post("/create", verifyToken, PurchaseOrderController.createPurchaseOrder);
 purchaseOrderRouter.get("/get", verifyToken, PurchaseOrderController.getAllPurchaseOrder);
+purchaseOrderRouter.get("/export-csv", verifyToken, PurchaseOrderController.exportPurchaseOrdersCSV);
 purchaseOrderRouter.patch("/bulk-toggle-active", verifyToken, PurchaseOrderController.bulkToggleActivePurchaseOrder);
 purchaseOrderRouter.get("/:id", verifyToken, PurchaseOrderController.getPurchaseOrderById);
 purchaseOrderRouter.put("/:id", verifyToken, PurchaseOrderController.updatePurchaseOrder);
